@@ -586,7 +586,7 @@ func CreateWCOW(ctx context.Context, opts *OptionsWCOW) (_ *UtilityVM, err error
 		}
 	}()
 
-	if err := verifyOptions(ctx, opts); err != nil {
+	if err := VerifyOptions(ctx, opts); err != nil {
 		return nil, errors.Wrap(err, errBadUVMOpts.Error())
 	}
 

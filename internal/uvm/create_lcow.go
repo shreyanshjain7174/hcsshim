@@ -458,7 +458,7 @@ func makeLCOWVMGSDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ 
 // This is done prior to json seriaisation and sending to the HCS layer to actually do the work of creating the VM.
 // Many details are quite different (see the typical JSON examples), in particular it boots from a VMGS file
 // which contains both the kernel and initrd as well as kernel boot options.
-func makeLCOWSecurityDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ *hcsschema.ComputeSystem, err error) {
+func MakeLCOWSecurityDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ *hcsschema.ComputeSystem, err error) {
 	doc, vmgsErr := makeLCOWVMGSDoc(ctx, opts, uvm)
 	if vmgsErr != nil {
 		return nil, vmgsErr
@@ -537,7 +537,7 @@ Example JSON document produced once the hcsschema.ComputeSytem returned by makeL
 */
 
 // Make the ComputeSystem document object that will be serialized to json to be presented to the HCS api.
-func makeLCOWDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ *hcsschema.ComputeSystem, err error) {
+func MakeLCOWDoc(ctx context.Context, opts *OptionsLCOW, uvm *UtilityVM) (_ *hcsschema.ComputeSystem, err error) {
 	if logrus.IsLevelEnabled(logrus.TraceLevel) {
 		log.G(ctx).WithField("options", log.Format(ctx, opts)).Trace("makeLCOWDoc")
 	}
@@ -931,14 +931,14 @@ func CreateLCOW(ctx context.Context, opts *OptionsLCOW) (_ *UtilityVM, err error
 		uvm.scsiControllerCount = 4
 	}
 
-	if err = verifyOptions(ctx, opts); err != nil {
+	if err = VerifyOptions(ctx, opts); err != nil {
 		return nil, errors.Wrap(err, errBadUVMOpts.Error())
 	}
 
 	// HCS config for SNP isolated vm is quite different to the usual case
 	var doc *hcsschema.ComputeSystem
 	if opts.SecurityPolicyEnabled {
-		doc, err = makeLCOWSecurityDoc(ctx, opts, uvm)
+		doc, err = MakeLCOWSecurityDoc(ctx, opts, uvm)
 		if logrus.IsLevelEnabled(logrus.TraceLevel) {
 			log.G(ctx).WithFields(logrus.Fields{
 				"doc":           log.Format(ctx, doc),
@@ -946,7 +946,7 @@ func CreateLCOW(ctx context.Context, opts *OptionsLCOW) (_ *UtilityVM, err error
 			}).Trace("create_lcow::CreateLCOW makeLCOWSecurityDoc result")
 		}
 	} else {
-		doc, err = makeLCOWDoc(ctx, opts, uvm)
+		doc, err = MakeLCOWDoc(ctx, opts, uvm)
 		if logrus.IsLevelEnabled(logrus.TraceLevel) {
 			log.G(ctx).WithFields(logrus.Fields{
 				"doc":           log.Format(ctx, doc),

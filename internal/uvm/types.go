@@ -152,6 +152,22 @@ func (uvm *UtilityVM) ScratchEncryptionEnabled() bool {
 	return uvm.encryptScratch
 }
 
+// NewUtilityVMForDoc creates a minimal UtilityVM with the fields needed by
+// MakeLCOWDoc and MakeLCOWSecurityDoc for HCS document generation. This is
+// not a runnable VM — it exists only for parity testing.
+func NewUtilityVMForDoc(id, owner string, scsiControllerCount, vpmemMaxCount uint32, vpmemMaxSizeBytes uint64, vpmemMultiMapping bool) *UtilityVM {
+	return &UtilityVM{
+		id:                  id,
+		owner:               owner,
+		operatingSystem:     "linux",
+		scsiControllerCount: scsiControllerCount,
+		vpmemMaxCount:       vpmemMaxCount,
+		vpmemMaxSizeBytes:   vpmemMaxSizeBytes,
+		vpciDevices:         make(map[VPCIDeviceID]*VPCIDevice),
+		vpmemMultiMapping:   vpmemMultiMapping,
+	}
+}
+
 type WCOWBootFilesType uint8
 
 const (

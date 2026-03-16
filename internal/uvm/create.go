@@ -160,7 +160,7 @@ func verifyWCOWBootFiles(bootFiles *WCOWBootFiles) error {
 }
 
 // Verifies that the final UVM options are correct and supported.
-func verifyOptions(_ context.Context, options interface{}) error {
+func VerifyOptions(_ context.Context, options interface{}) error {
 	switch opts := options.(type) {
 	case *OptionsLCOW:
 		if opts.EnableDeferredCommit && !opts.AllowOvercommit {
