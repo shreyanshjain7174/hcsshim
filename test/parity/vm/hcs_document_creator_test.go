@@ -8,9 +8,12 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/opencontainers/runtime-spec/specs-go"
+
+	"github.com/google/go-cmp/cmp"
 
 	runhcsopts "github.com/Microsoft/hcsshim/cmd/containerd-shim-runhcs-v1/options"
 	lcowbuilder "github.com/Microsoft/hcsshim/internal/builder/vm/lcow"
@@ -110,4 +113,75 @@ func jsonToString(v interface{}) string {
 		panic(err)
 	}
 	return string(b)
+}
+
+// normalizeKernelCmdLine trims leading/trailing whitespace from the kernel
+// command line in the document. The legacy builder has a minor quirk that
+// produces a leading space for initrd+KernelDirect boot. The v2 builder
+// does not. Since HCS trims whitespace from kernel args, this difference
+// is harmless and we normalize it away.
+func normalizeKernelCmdLine(doc *hcsschema.ComputeSystem) {
+	if doc == nil || doc.VirtualMachine == nil || doc.VirtualMachine.Chipset == nil {
+		return
+	}
+	if kd := doc.VirtualMachine.Chipset.LinuxKernelDirect; kd != nil {
+		kd.KernelCmdLine = strings.TrimSpace(kd.KernelCmdLine)
+	}
+	if uefi := doc.VirtualMachine.Chipset.Uefi; uefi != nil && uefi.BootThis != nil {
+		uefi.BootThis.OptionalData = strings.TrimSpace(uefi.BootThis.OptionalData)
+	}
+}
+
+// isOnlyKernelCmdLineWhitespaceDiff returns true if the only difference between
+// two documents is leading/trailing whitespace in the kernel command line.
+// This is a known legacy quirk where initrd+KernelDirect boot produces a
+// leading space that v2 correctly omits.
+func isOnlyKernelCmdLineWhitespaceDiff(legacy, v2 *hcsschema.ComputeSystem) bool {
+	// Deep copy and normalize, then re-compare.
+	legacyCopy := *legacy
+	v2Copy := *v2
+	// Shallow copy the VM and chipset to avoid mutating originals.
+	if legacyCopy.VirtualMachine != nil {
+		vmCopy := *legacyCopy.VirtualMachine
+		legacyCopy.VirtualMachine = &vmCopy
+		if vmCopy.Chipset != nil {
+			chipCopy := *vmCopy.Chipset
+			legacyCopy.VirtualMachine.Chipset = &chipCopy
+			if chipCopy.LinuxKernelDirect != nil {
+				lkdCopy := *chipCopy.LinuxKernelDirect
+				legacyCopy.VirtualMachine.Chipset.LinuxKernelDirect = &lkdCopy
+			}
+			if chipCopy.Uefi != nil {
+				uefiCopy := *chipCopy.Uefi
+				legacyCopy.VirtualMachine.Chipset.Uefi = &uefiCopy
+				if uefiCopy.BootThis != nil {
+					btCopy := *uefiCopy.BootThis
+					legacyCopy.VirtualMachine.Chipset.Uefi.BootThis = &btCopy
+				}
+			}
+		}
+	}
+	if v2Copy.VirtualMachine != nil {
+		vmCopy := *v2Copy.VirtualMachine
+		v2Copy.VirtualMachine = &vmCopy
+		if vmCopy.Chipset != nil {
+			chipCopy := *vmCopy.Chipset
+			v2Copy.VirtualMachine.Chipset = &chipCopy
+			if chipCopy.LinuxKernelDirect != nil {
+				lkdCopy := *chipCopy.LinuxKernelDirect
+				v2Copy.VirtualMachine.Chipset.LinuxKernelDirect = &lkdCopy
+			}
+			if chipCopy.Uefi != nil {
+				uefiCopy := *chipCopy.Uefi
+				v2Copy.VirtualMachine.Chipset.Uefi = &uefiCopy
+				if uefiCopy.BootThis != nil {
+					btCopy := *uefiCopy.BootThis
+					v2Copy.VirtualMachine.Chipset.Uefi.BootThis = &btCopy
+				}
+			}
+		}
+	}
+	normalizeKernelCmdLine(&legacyCopy)
+	normalizeKernelCmdLine(&v2Copy)
+	return cmp.Diff(&legacyCopy, &v2Copy) == ""
 }
