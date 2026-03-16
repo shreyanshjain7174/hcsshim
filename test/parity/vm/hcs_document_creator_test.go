@@ -115,6 +115,30 @@ func jsonToString(v interface{}) string {
 	return string(b)
 }
 
+// normalizeVirtualPci replaces the random VMBus GUID keys in the VirtualPci
+// device map with deterministic keys derived from the device instance paths.
+// Both legacy and v2 builders generate random GUIDs for VMBus identifiers,
+// so exact map key comparison is impossible without normalization.
+func normalizeVirtualPci(doc *hcsschema.ComputeSystem) {
+	if doc == nil || doc.VirtualMachine == nil || doc.VirtualMachine.Devices == nil {
+		return
+	}
+	vpci := doc.VirtualMachine.Devices.VirtualPci
+	if len(vpci) == 0 {
+		return
+	}
+	normalized := make(map[string]hcsschema.VirtualPciDevice, len(vpci))
+	for _, dev := range vpci {
+		// Use the first function's device instance path as a stable key.
+		key := "unknown"
+		if len(dev.Functions) > 0 {
+			key = dev.Functions[0].DeviceInstancePath
+		}
+		normalized[key] = dev
+	}
+	doc.VirtualMachine.Devices.VirtualPci = normalized
+}
+
 // normalizeKernelCmdLine trims leading/trailing whitespace from the kernel
 // command line in the document. The legacy builder has a minor quirk that
 // produces a leading space for initrd+KernelDirect boot. The v2 builder

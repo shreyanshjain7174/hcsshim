@@ -429,6 +429,177 @@ func TestLCOWDocumentParityPermutations(t *testing.T) {
 			},
 		},
 
+		// --- Console pipe ---
+
+		{
+			name: "console: named pipe enables COM port + nr_uarts=1",
+			annotations: map[string]string{
+				iannotations.UVMConsolePipe:                `\\.\pipe\test-console`,
+				shimannotations.CPUGroupID:                 "console-group",
+				shimannotations.StorageQoSIopsMaximum:      "1000",
+				shimannotations.StorageQoSBandwidthMaximum: "100000",
+			},
+		},
+
+		// --- Memory: deferred commit ---
+
+		{
+			name: "memory: deferred commit enabled (requires overcommit)",
+			annotations: map[string]string{
+				shimannotations.AllowOvercommit:            "true",
+				shimannotations.EnableDeferredCommit:       "true",
+				shimannotations.MemorySizeInMB:             "2048",
+				shimannotations.CPUGroupID:                 "deferred-commit-group",
+				shimannotations.StorageQoSIopsMaximum:      "1000",
+				shimannotations.StorageQoSBandwidthMaximum: "100000",
+			},
+		},
+
+		// --- VPMem size ---
+
+		{
+			name: "device: non-default VPMem size",
+			annotations: map[string]string{
+				shimannotations.VPMemSize:                  "536870912",
+				shimannotations.PreferredRootFSType:        "vhd",
+				shimannotations.KernelDirectBoot:           "true",
+				shimannotations.CPUGroupID:                 "vpmem-size-group",
+				shimannotations.StorageQoSIopsMaximum:      "1000",
+				shimannotations.StorageQoSBandwidthMaximum: "100000",
+			},
+		},
+
+		// --- DmVerity boot ---
+
+		{
+			name: "boot: dm-verity mode with SCSI rootfs",
+			annotations: map[string]string{
+				shimannotations.PreferredRootFSType:        "vhd",
+				shimannotations.KernelDirectBoot:           "true",
+				shimannotations.DmVerityMode:               "true",
+				shimannotations.DmVerityCreateArgs:         `dm-test linear 0 1024 /dev/sda 0`,
+				shimannotations.VPMemCount:                 "0",
+				shimannotations.CPUGroupID:                 "dmverity-group",
+				shimannotations.StorageQoSIopsMaximum:      "1000",
+				shimannotations.StorageQoSBandwidthMaximum: "100000",
+			},
+		},
+
+		// --- Cross-group: console + deferred commit + VHD boot ---
+
+		{
+			name: "cross: console pipe + deferred commit + VHD boot",
+			annotations: map[string]string{
+				iannotations.UVMConsolePipe:                `\\.\pipe\cross-console`,
+				shimannotations.AllowOvercommit:            "true",
+				shimannotations.EnableDeferredCommit:       "true",
+				shimannotations.MemorySizeInMB:             "2048",
+				shimannotations.PreferredRootFSType:        "vhd",
+				shimannotations.KernelDirectBoot:           "true",
+				shimannotations.CPUGroupID:                 "cross-console-deferred-group",
+				shimannotations.StorageQoSIopsMaximum:      "1000",
+				shimannotations.StorageQoSBandwidthMaximum: "100000",
+			},
+		},
+
+		// --- VPCI device passthrough ---
+
+		{
+			name: "device: single VPCI device assignment",
+			annotations: map[string]string{
+				shimannotations.VPCIEnabled:                "true",
+				shimannotations.CPUGroupID:                 "vpci-device-group",
+				shimannotations.StorageQoSIopsMaximum:      "1000",
+				shimannotations.StorageQoSBandwidthMaximum: "100000",
+			},
+			devices: []specs.WindowsDevice{
+				{ID: "vpci://a0a0a0a0-b1b1-c2c2-d3d3-e4e4e4e4e4e4/0", IDType: "vpci"},
+			},
+		},
+		{
+			name: "device: multiple VPCI devices",
+			annotations: map[string]string{
+				shimannotations.VPCIEnabled:                "true",
+				shimannotations.CPUGroupID:                 "multi-vpci-group",
+				shimannotations.StorageQoSIopsMaximum:      "1000",
+				shimannotations.StorageQoSBandwidthMaximum: "100000",
+			},
+			devices: []specs.WindowsDevice{
+				{ID: "vpci://a0a0a0a0-b1b1-c2c2-d3d3-e4e4e4e4e4e4/0", IDType: "vpci"},
+				{ID: "vpci://b1b1b1b1-c2c2-d3d3-e4e4-f5f5f5f5f5f5/0", IDType: "vpci"},
+			},
+		},
+
+		// --- Extra vsock ports ---
+
+		{
+			name: "hvsocket: extra vsock ports",
+			annotations: map[string]string{
+				iannotations.ExtraVSockPorts:               "5000,5001",
+				shimannotations.CPUGroupID:                 "vsock-ports-group",
+				shimannotations.StorageQoSIopsMaximum:      "1000",
+				shimannotations.StorageQoSBandwidthMaximum: "100000",
+			},
+		},
+
+		// --- NUMA topology (implicit) ---
+
+		{
+			name: "NUMA: implicit topology (max processors/memory per node)",
+			annotations: map[string]string{
+				shimannotations.AllowOvercommit:              "false",
+				shimannotations.MemorySizeInMB:               "4096",
+				shimannotations.ProcessorCount:               "4",
+				shimannotations.NumaMaximumProcessorsPerNode: "2",
+				shimannotations.NumaMaximumMemorySizePerNode: "2048",
+				shimannotations.CPUGroupID:                   "numa-implicit-group",
+				shimannotations.StorageQoSIopsMaximum:        "1000",
+				shimannotations.StorageQoSBandwidthMaximum:   "100000",
+			},
+		},
+
+		// --- NUMA topology (explicit) ---
+
+		{
+			name: "NUMA: explicit topology (mapped physical nodes + processor/memory counts)",
+			annotations: map[string]string{
+				shimannotations.AllowOvercommit:            "false",
+				shimannotations.MemorySizeInMB:             "4096",
+				shimannotations.ProcessorCount:             "4",
+				shimannotations.NumaMappedPhysicalNodes:    "0,1",
+				shimannotations.NumaCountOfProcessors:      "2,2",
+				shimannotations.NumaCountOfMemoryBlocks:    "2048,2048",
+				shimannotations.CPUGroupID:                 "numa-explicit-group",
+				shimannotations.StorageQoSIopsMaximum:      "1000",
+				shimannotations.StorageQoSBandwidthMaximum: "100000",
+			},
+		},
+
+		// --- ResourcePartitionID (mutually exclusive with CPUGroupID) ---
+
+		{
+			name: "CPU: resource partition ID instead of CPUGroupID",
+			annotations: map[string]string{
+				shimannotations.ResourcePartitionID:        "12345678-1234-1234-1234-123456789abc",
+				shimannotations.ProcessorCount:             "2",
+				shimannotations.MemorySizeInMB:             "2048",
+				shimannotations.StorageQoSIopsMaximum:      "1000",
+				shimannotations.StorageQoSBandwidthMaximum: "100000",
+			},
+		},
+
+		// --- HvSocket service table via annotation prefix ---
+
+		{
+			name: "hvsocket: custom service table entry via annotation prefix",
+			annotations: map[string]string{
+				iannotations.UVMHyperVSocketConfigPrefix + "12345678-1234-1234-1234-123456789abc": `{"AllowWildcardBinds":true,"BindSecurityDescriptor":"D:P(A;;FA;;;WD)"}`,
+				shimannotations.CPUGroupID:                 "hvsocket-prefix-group",
+				shimannotations.StorageQoSIopsMaximum:      "1000",
+				shimannotations.StorageQoSBandwidthMaximum: "100000",
+			},
+		},
+
 		// --- Cases that expose known differences between legacy and v2 ---
 		// These document real parity gaps for the v2 builder team to fix.
 
@@ -514,6 +685,11 @@ func TestLCOWDocumentParityPermutations(t *testing.T) {
 				t.Logf("Legacy options: %+v", legacyOpts)
 				t.Logf("V2 sandbox options: %+v", sandboxOpts)
 			}
+
+			// Normalize VPCI map keys before comparison — both builders
+			// generate random VMBus GUIDs that can never match.
+			normalizeVirtualPci(legacyDoc)
+			normalizeVirtualPci(v2Doc)
 
 			diff := cmp.Diff(legacyDoc, v2Doc)
 
