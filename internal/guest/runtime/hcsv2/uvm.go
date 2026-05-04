@@ -99,6 +99,11 @@ type Host struct {
 	containerToVirtualPod    map[string]string      // containerID -> virtualSandboxID
 	virtualPodsCgroupManager cgroup.Manager         // Parent cgroup for all virtual pods
 
+	// stdioSlotsMutex guards stdioSlots.
+	// Lock ordering: containersMutex -> stdioSlotsMutex (never reverse).
+	stdioSlotsMutex sync.Mutex
+	stdioSlots      []*stdio.ConnSlot
+
 	// sandboxRoots maps sandboxID to the resolved sandbox root directory.
 	// Populated via registerSandboxRoot during sandbox creation using
 	// the host-provided OCIBundlePath as source of truth.
@@ -203,6 +208,36 @@ func (h *Host) SecurityOptions() *securitypolicy.SecurityOptions {
 
 func (h *Host) Transport() transport.Transport {
 	return h.vsock
+}
+
+// RegisterStdioSlots tracks per-process stdio for bridge-reconnect back
+// pressure. Called from container Start and ExecProcess after stdio.Connect.
+// Any *stdio.ConnSlot in the set is added to the registry; nil entries and
+// other transport.Connection types are ignored.
+func (h *Host) RegisterStdioSlots(set *stdio.ConnectionSet) {
+	if set == nil {
+		return
+	}
+	h.stdioSlotsMutex.Lock()
+	defer h.stdioSlotsMutex.Unlock()
+	for _, c := range []transport.Connection{set.In, set.Out, set.Err} {
+		if slot, ok := c.(*stdio.ConnSlot); ok {
+			h.stdioSlots = append(h.stdioSlots, slot)
+		}
+	}
+}
+
+// DisconnectAllStdio drops the current connection on every tracked stdio slot.
+// Called from the GCS reconnect loop after the bridge connection is lost.
+// Relays park inside slot.Write until the host re-attaches stdio with a fresh
+// connection; the producing process pauses naturally when its kernel pipe
+// buffer fills.
+func (h *Host) DisconnectAllStdio() {
+	h.stdioSlotsMutex.Lock()
+	defer h.stdioSlotsMutex.Unlock()
+	for _, s := range h.stdioSlots {
+		s.Disconnect()
+	}
 }
 
 func (h *Host) RemoveContainer(id string) {
@@ -405,6 +440,7 @@ func (h *Host) CreateContainer(ctx context.Context, id string, settings *prot.VM
 
 	c := &Container{
 		id:             id,
+		host:           h,
 		vsock:          h.vsock,
 		spec:           settings.OCISpecification,
 		ociBundlePath:  settings.OCIBundlePath,
@@ -1077,6 +1113,7 @@ func (h *Host) runExternalProcess(
 	if err != nil {
 		return -1, err
 	}
+	h.RegisterStdioSlots(stdioSet)
 	defer func() {
 		if err != nil {
 			stdioSet.Close()

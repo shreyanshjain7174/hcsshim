@@ -19,7 +19,8 @@ type ConnectionSettings struct {
 
 // Connect returns new transport.Connection instances, one for each stdio pipe
 // to be used. If CreateStd*Pipe for a given pipe is false, the given Connection
-// is set to nil.
+// is set to nil. Each connection is wrapped in a ConnSlot so the underlying
+// vsock can be replaced when the bridge reconnects after live migration.
 func Connect(tport transport.Transport, settings ConnectionSettings) (_ *ConnectionSet, err error) {
 	connSet := &ConnectionSet{}
 	defer func() {
@@ -32,21 +33,21 @@ func Connect(tport transport.Transport, settings ConnectionSettings) (_ *Connect
 		if err != nil {
 			return nil, errors.Wrap(err, "failed creating stdin Connection")
 		}
-		connSet.In = transport.NewLogConnection(c, *settings.StdIn)
+		connSet.In = NewConnSlot(transport.NewLogConnection(c, *settings.StdIn))
 	}
 	if settings.StdOut != nil {
 		c, err := tport.Dial(*settings.StdOut)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed creating stdout Connection")
 		}
-		connSet.Out = transport.NewLogConnection(c, *settings.StdOut)
+		connSet.Out = NewConnSlot(transport.NewLogConnection(c, *settings.StdOut))
 	}
 	if settings.StdErr != nil {
 		c, err := tport.Dial(*settings.StdErr)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed creating stderr Connection")
 		}
-		connSet.Err = transport.NewLogConnection(c, *settings.StdErr)
+		connSet.Err = NewConnSlot(transport.NewLogConnection(c, *settings.StdErr))
 	}
 	return connSet, nil
 }

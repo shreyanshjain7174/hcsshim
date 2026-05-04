@@ -46,6 +46,10 @@ const (
 type Container struct {
 	id string
 
+	// host is the parent Host. Used to register stdio slots so that the
+	// reconnect loop can disconnect them when the bridge drops.
+	host *Host
+
 	vsock   transport.Transport
 	logPath string   // path to [logFile].
 	logFile *os.File // file to redirect container's stdio to.
@@ -116,6 +120,7 @@ func (c *Container) Start(ctx context.Context, conSettings stdio.ConnectionSetti
 	if err != nil {
 		return -1, err
 	}
+	c.host.RegisterStdioSlots(stdioSet)
 
 	if c.initProcess.spec.Terminal {
 		ttyr := c.container.Tty()
@@ -140,6 +145,7 @@ func (c *Container) ExecProcess(ctx context.Context, process *oci.Process, conSe
 	if err != nil {
 		return -1, err
 	}
+	c.host.RegisterStdioSlots(stdioSet)
 
 	// Add in the core rlimit specified on the container in case there was one set. This makes it so that execed processes can also generate
 	// core dumps.
