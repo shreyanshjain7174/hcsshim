@@ -45,8 +45,9 @@ const (
 )
 
 type Container struct {
-	id    string
-	vsock transport.Transport
+	id           string
+	vsock        transport.Transport
+	slotRegistry slotRegistry
 
 	spec          *oci.Spec
 	ociBundlePath string
@@ -70,11 +71,22 @@ type Container struct {
 	scratchDirPath string
 }
 
+// slotRegistry is the narrow seam Container uses to register the stdio
+// ConnSlots produced by stdio.Connect with the parent Host so the bridge
+// reconnect loop can disconnect them after live migration. Defined here so
+// container.go does not depend on the concrete *Host type.
+type slotRegistry interface {
+	RegisterStdioSlots(*stdio.ConnectionSet)
+}
+
 func (c *Container) Start(ctx context.Context, conSettings stdio.ConnectionSettings) (int, error) {
 	log.G(ctx).WithField(logfields.ContainerID, c.id).Info("opengcs::Container::Start")
 	stdioSet, err := stdio.Connect(c.vsock, conSettings)
 	if err != nil {
 		return -1, err
+	}
+	if c.slotRegistry != nil {
+		c.slotRegistry.RegisterStdioSlots(stdioSet)
 	}
 	if c.initProcess.spec.Terminal {
 		ttyr := c.container.Tty()
@@ -98,6 +110,9 @@ func (c *Container) ExecProcess(ctx context.Context, process *oci.Process, conSe
 	stdioSet, err := stdio.Connect(c.vsock, conSettings)
 	if err != nil {
 		return -1, err
+	}
+	if c.slotRegistry != nil {
+		c.slotRegistry.RegisterStdioSlots(stdioSet)
 	}
 
 	// Add in the core rlimit specified on the container in case there was one set. This makes it so that execed processes can also generate

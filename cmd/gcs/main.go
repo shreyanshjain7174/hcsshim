@@ -423,6 +423,11 @@ func main() {
 			}).Error("failed to serve gcs service")
 		}
 		tport.DisconnectReconns()
+		// Drop every container stdio ConnSlot. Relay goroutines park inside
+		// ConnSlot.Write until the host re-attaches stdio with a fresh
+		// connection; producing processes pause naturally when their kernel
+		// pipe buffers fill, preserving in-flight bytes.
+		h.DisconnectAllStdio()
 		time.Sleep(3 * time.Second)
 	}
 

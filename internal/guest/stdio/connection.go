@@ -76,7 +76,8 @@ var _ = (Conn)(&logConnection{})
 
 // Connect returns new transport.Connection instances, one for each stdio pipe
 // to be used. If CreateStd*Pipe for a given pipe is false, the given Connection
-// is set to nil.
+// is set to nil. Each connection is wrapped in a ConnSlot so the underlying
+// vsock can be replaced when the bridge reconnects after live migration.
 func Connect(tport transport.Transport, settings ConnectionSettings) (_ *ConnectionSet, err error) {
 	connSet := &ConnectionSet{}
 	defer func() {
@@ -85,38 +86,46 @@ func Connect(tport transport.Transport, settings ConnectionSettings) (_ *Connect
 		}
 	}()
 	if settings.StdIn != nil {
-		logrus.WithField("port", *settings.StdIn).Info("connecting to stdin port")
-		c, err := tport.DialReconn(*settings.StdIn)
+		port := *settings.StdIn
+		logrus.WithField("port", port).Info("connecting to stdin port")
+		c, err := tport.Dial(port)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed creating stdin Connection")
 		}
-		connSet.In = &logConnection{
-			con:  c,
-			port: *settings.StdIn,
-		}
+		connSet.In = NewConnSlot(&logConnection{con: c, port: port}, redialer(tport, port))
 	}
 	if settings.StdOut != nil {
-		logrus.WithField("port", *settings.StdOut).Info("connecting to stdout port")
-		c, err := tport.DialReconn(*settings.StdOut)
+		port := *settings.StdOut
+		logrus.WithField("port", port).Info("connecting to stdout port")
+		c, err := tport.Dial(port)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed creating stdout Connection")
 		}
-		connSet.Out = &logConnection{
-			con:  c,
-			port: *settings.StdOut,
-		}
+		connSet.Out = NewConnSlot(&logConnection{con: c, port: port}, redialer(tport, port))
 	}
 	if settings.StdErr != nil {
-		logrus.WithField("port", *settings.StdErr).Info("connecting to stderr port")
-		c, err := tport.DialReconn(*settings.StdErr)
+		port := *settings.StdErr
+		logrus.WithField("port", port).Info("connecting to stderr port")
+		c, err := tport.Dial(port)
 		if err != nil {
 			return nil, errors.Wrap(err, "failed creating stderr Connection")
 		}
-
-		connSet.Err = &logConnection{
-			con:  c,
-			port: *settings.StdErr,
-		}
+		connSet.Err = NewConnSlot(&logConnection{con: c, port: port}, redialer(tport, port))
 	}
 	return connSet, nil
+}
+
+// redialer returns a callback that re-dials the given vsock port via the
+// provided transport. Used by ConnSlot to recover from a bridge disconnect:
+// after live migration the source-host listener is gone but the destination
+// host has a fresh listener on the same port number.
+func redialer(tport transport.Transport, port uint32) func() (transport.Connection, error) {
+	return func() (transport.Connection, error) {
+		logrus.WithField("port", port).Info("ConnSlot: redialing port")
+		nc, err := tport.Dial(port)
+		if err != nil {
+			return nil, err
+		}
+		return &logConnection{con: nc, port: port}, nil
+	}
 }
