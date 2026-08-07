@@ -187,10 +187,12 @@ func (l *ResourceCloserList) AddFunc(rOp ResourceCloserFunc) *ResourceCloserList
 
 func (l *ResourceCloserList) Release(ctx context.Context) error {
 	// MUST release in the reverse order
+	var errs []error
 	for i := len(l.closers) - 1; i >= 0; i-- {
 		if oErr := l.closers[i].Release(ctx); oErr != nil {
-			return oErr
+			log.G(ctx).WithError(oErr).Error("failed to release resource in ResourceCloserList")
+			errs = append(errs, oErr)
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
