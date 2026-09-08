@@ -60,8 +60,8 @@ It is based on upstream commit `61fd38fe6114d0955a082aa717a8e16e722b8490`.
 The compatible `openvmm.exe` must include LCOW parity in its vmservice-created VM path:
 
 - TimeSync integration for normal GCS boot.
-- Four LCOW VMBus SCSI controllers, created when SCSI disks are present and indexed by
-  `SCSIDisk.controller` for create, add, and remove.
+- Four LCOW VMBus SCSI controllers, always created so initially diskless VMs support hot-add and
+  indexed by `SCSIDisk.controller` for create, add, and remove.
 - Dynamic VMBus device identity and removal for DIO NIC cleanup, using existing
   `NICConfig.nic_id`.
 - Shutdown/KVP lifetime and teardown ordering when those integration components are enabled.
