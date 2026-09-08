@@ -4,10 +4,12 @@ package safefile
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"unicode/utf16"
 	"unsafe"
@@ -212,6 +214,76 @@ func deleteOnClose(f *os.File) error {
 		return winapi.RtlNtStatusToDosError(status)
 	}
 	return nil
+}
+
+// DeleteHandle pins one filesystem object behind a handle that denies delete sharing.
+// Remove therefore cannot be redirected to a replacement inserted at the same pathname.
+type DeleteHandle struct {
+	mu      sync.Mutex
+	path    string
+	file    *os.File
+	removed bool
+}
+
+// OpenDeleteHandle opens path with delete access while denying delete sharing.
+func OpenDeleteHandle(path string) (*DeleteHandle, error) {
+	file, err := winio.OpenForBackup(
+		path,
+		winapi.DELETE|winapi.FILE_READ_ATTRIBUTES,
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE,
+		syscall.OPEN_EXISTING,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &DeleteHandle{path: path, file: file}, nil
+}
+
+// Mode returns the mode of the pinned object.
+func (h *DeleteHandle) Mode() (os.FileMode, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.file == nil {
+		return 0, fmt.Errorf("cannot inspect %s: no ownership handle", h.path)
+	}
+	info, err := h.file.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return info.Mode(), nil
+}
+
+// Remove marks the pinned object for deletion and closes the handle.
+func (h *DeleteHandle) Remove() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.removed {
+		return nil
+	}
+	if h.file == nil {
+		return fmt.Errorf("cannot remove %s: no ownership handle", h.path)
+	}
+	if err := deleteOnClose(h.file); err != nil {
+		return &os.PathError{Op: "remove", Path: h.path, Err: err}
+	}
+	if err := h.file.Close(); err != nil {
+		return &os.PathError{Op: "remove", Path: h.path, Err: err}
+	}
+	h.file = nil
+	h.removed = true
+	return nil
+}
+
+// Close releases the ownership handle without deleting the object.
+func (h *DeleteHandle) Close() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.file == nil {
+		return nil
+	}
+	err := h.file.Close()
+	h.file = nil
+	return err
 }
 
 // clearReadOnly clears the readonly attribute on a file.

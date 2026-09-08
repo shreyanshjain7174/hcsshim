@@ -29,6 +29,9 @@ import (
 // Save captures the migrating VM's state into a serialized snapshot that the
 // destination host consumes to recreate an equivalent VM.
 func (c *Controller) Save(ctx context.Context) (*anypb.Any, error) {
+	if err := c.rejectUnsupportedMigration("Save"); err != nil {
+		return nil, err
+	}
 	// CompatibilityInfo takes its own read lock; fetch it before acquiring
 	// ours to avoid recursive RLock acquisition.
 	compatInfo, err := c.CompatibilityInfo(ctx)
@@ -111,6 +114,9 @@ func (c *Controller) Save(ctx context.Context) (*anypb.Any, error) {
 // Save. The controller comes back inert in the migrating state and performs no
 // live work until Resume supplies the running VM.
 func (c *Controller) Import(ctx context.Context, env *anypb.Any) (err error) {
+	if err := c.rejectUnsupportedMigration("Import"); err != nil {
+		return err
+	}
 	if env == nil {
 		return fmt.Errorf("vm saved-state envelope is nil: %w", errdefs.ErrInvalidArgument)
 	}
@@ -178,6 +184,9 @@ func (c *Controller) Import(ctx context.Context, env *anypb.Any) (err error) {
 // the destination host, readying it for [Controller.Resume]. Run after the
 // disk locations have been rewritten to their destination-local paths.
 func (c *Controller) Patch(ctx context.Context) error {
+	if err := c.rejectUnsupportedMigration("Patch"); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -208,6 +217,9 @@ func (c *Controller) Patch(ctx context.Context) error {
 // source side rebuilds its guest bridge to recover outstanding RPCs; the
 // destination side reuses the connection already armed at start.
 func (c *Controller) Resume(ctx context.Context, rebuildBridge bool) error {
+	if err := c.rejectUnsupportedMigration("Resume"); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

@@ -23,6 +23,7 @@ import (
 	"github.com/Microsoft/hcsshim/internal/shimdiag"
 	"github.com/Microsoft/hcsshim/internal/timeout"
 	"github.com/Microsoft/hcsshim/internal/vm/guestmanager"
+	"github.com/Microsoft/hcsshim/internal/vm/transport"
 	"github.com/Microsoft/hcsshim/internal/vm/vmmanager"
 	"github.com/Microsoft/hcsshim/internal/vm/vmutils"
 	iwin "github.com/Microsoft/hcsshim/internal/windows"
@@ -37,13 +38,17 @@ import (
 // Controller is the VM controller implementation that manages the lifecycle of a Utility VM
 // and its associated resources.
 type Controller struct {
-	vmID  string
-	uvm   *vmmanager.UtilityVM
-	guest *guestmanager.Guest
+	vmID      string
+	uvm       *vmmanager.UtilityVM
+	guest     *guestmanager.Guest
+	transport transport.Factory
 
 	// vmState tracks the current state of the VM lifecycle.
 	// Access must be guarded by mu.
 	vmState State
+	// resourcesClosed is separate from StateTerminated: a natural guest exit makes final
+	// status available before the host handles and transport have necessarily been closed.
+	resourcesClosed bool
 
 	// mu guards the concurrent access to the Controller's fields and operations.
 	mu sync.RWMutex
@@ -78,6 +83,12 @@ type Controller struct {
 
 	// platformControllers embeds platform-specific sub-controllers (e.g., Plan9 for LCOW).
 	platformControllers //nolint:unused,nolintlint // embedded for cross-platform compatibility; empty on WCOW
+}
+
+type coldCreateResult struct {
+	uvm         *vmmanager.UtilityVM
+	hcsDocument *hcsschema.ComputeSystem
+	prepare     func(context.Context, *vmmanager.UtilityVM, *guestmanager.Guest) (func(), error)
 }
 
 // New creates a new Controller instance in the [StateNotCreated] state.
@@ -120,32 +131,35 @@ func (c *Controller) RuntimeID() string {
 	return c.uvm.RuntimeID().String()
 }
 
-// CreateVM creates the VM from either a freshly built HCS document (cold boot)
-// or the document imported on the migration destination.
+// CreateVM creates the VM from either the configured cold-boot backend or the
+// HCS document imported on the migration destination.
 func (c *Controller) CreateVM(ctx context.Context, opts *CreateOptions) error {
 	ctx, _ = log.WithContext(ctx, logrus.WithField(logfields.Operation, "CreateVM"))
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Pick the HCS document we hand to vmmanager based on the controller's
-	// current state:
-	//   - StateNotCreated: cold-boot path; build a fresh document.
+	// Pick the creation path based on the controller's current state:
+	//   - StateNotCreated: cold-boot path; use the configured backend.
 	//   - StateDestinationMigrationImported: destination side of a live migration;
 	//     reuse the document rehydrated by Import and stamp opts.MigrationOptions
 	//     onto it.
 	// Any other state is invalid for CreateVM.
 	var hcsDocument *hcsschema.ComputeSystem
+	var coldResult *coldCreateResult
+	var uvm *vmmanager.UtilityVM
 	// Cold boot lands in StateCreated; the destination migration path lands in
 	// StateDestinationMigrationCreated.
 	nextState := StateCreated
 	switch c.vmState {
 	case StateNotCreated:
-		doc, err := c.buildHCSConfig(ctx, opts)
+		result, err := c.createColdVM(ctx, opts)
 		if err != nil {
-			return fmt.Errorf("failed to build VM config: %w", err)
+			return err
 		}
-		hcsDocument = doc
+		coldResult = result
+		uvm = result.uvm
+		hcsDocument = result.hcsDocument
 	case StateDestinationMigrationImported:
 		nextState = StateDestinationMigrationCreated
 		if opts.MigrationOptions == nil {
@@ -185,21 +199,43 @@ func (c *Controller) CreateVM(ctx context.Context, opts *CreateOptions) error {
 		return fmt.Errorf("cannot create VM: VM is in incorrect state %s", c.vmState)
 	}
 
-	// Create the VM via vmmanager.
-	uvm, err := vmmanager.Create(ctx, opts.ID, hcsDocument)
+	// Migration destinations are always created through HCS.
+	if uvm == nil {
+		var err error
+		uvm, err = vmmanager.Create(ctx, opts.ID, hcsDocument)
+		if err != nil {
+			return fmt.Errorf("failed to create VM: %w", err)
+		}
+	}
+
+	factory, err := uvm.NewTransport()
 	if err != nil {
-		return fmt.Errorf("failed to create VM: %w", err)
+		_ = uvm.Close(ctx)
+		return fmt.Errorf("failed to create VM transport: %w", err)
+	}
+
+	guest := guestmanager.New(ctx, uvm, factory)
+	var commitPlatformState func()
+	if coldResult != nil && coldResult.prepare != nil {
+		commitPlatformState, err = coldResult.prepare(ctx, uvm, guest)
+		if err != nil {
+			factoryErr := factory.Close()
+			uvmErr := uvm.Close(ctx)
+			return fmt.Errorf("failed to prepare platform controller state: %w", errors.Join(err, factoryErr, uvmErr))
+		}
 	}
 
 	// Set the Controller parameters after successful creation.
 	c.vmID = opts.ID
 	c.uvm = uvm
+	c.transport = factory
+	// The guest connection is established during StartVM.
+	c.guest = guest
 	// Retain the final HCS document for lazy SCSI init and migration save.
 	c.hcsDocument = hcsDocument
-
-	// Initialize the GuestManager for managing guest interactions.
-	// We will create the guest connection via GuestManager during StartVM.
-	c.guest = guestmanager.New(ctx, uvm)
+	if commitPlatformState != nil {
+		commitPlatformState()
+	}
 
 	// Cold-boot lands in StateCreated; the destination-side migration path
 	// lands in StateDestinationMigrationCreated, from which Patch and
@@ -209,7 +245,7 @@ func (c *Controller) CreateVM(ctx context.Context, opts *CreateOptions) error {
 }
 
 // StartVM starts the VM that was previously created via CreateVM.
-// It starts the underlying HCS VM, establishes the GCS connection,
+// It starts the underlying VM, establishes the GCS connection,
 // and transitions the VM to [StateRunning].
 // On any failure the VM is transitioned to [StateInvalid].
 func (c *Controller) StartVM(ctx context.Context, opts *StartOptions) (err error) {
@@ -231,6 +267,9 @@ func (c *Controller) StartVM(ctx context.Context, opts *StartOptions) (err error
 
 	defer func() {
 		if err != nil {
+			if c.transport != nil {
+				_ = c.transport.Close()
+			}
 			// If starting the VM fails, we transition to Invalid state to prevent any further operations on the VM.
 			// The VM can be terminated by invoking TerminateVM.
 			c.vmState = StateInvalid
@@ -250,7 +289,7 @@ func (c *Controller) StartVM(ctx context.Context, opts *StartOptions) (err error
 	}()
 	defer cancel()
 
-	// Set up the host-side hvsock listeners for entropy and logs before
+	// Set up the host-side guest transport listeners for entropy and logs before
 	// starting the VM. The guest dials predefined vsock ports early in boot,
 	// so the listeners must be bound up front to avoid a race.
 	// Each setup call creates the listener synchronously and dispatches an
@@ -268,7 +307,7 @@ func (c *Controller) StartVM(ctx context.Context, opts *StartOptions) (err error
 	if err = c.setupLoggingListener(gctx, g); err != nil {
 		return fmt.Errorf("failed to set up logging listener: %w", err)
 	}
-	// Open the host-side GCS hvsock listener before VM start so the host
+	// Open the host-side GCS transport listener before VM start so the host
 	// is listening when the in-VM GCS dials. Otherwise, GCS falls back to
 	// the internal HCS bridge and our accept hangs until timeout.
 	if err = c.guest.PrepareConnection(opts.GCSServiceID); err != nil {
@@ -422,6 +461,11 @@ func (c *Controller) waitForVMExit(ctx context.Context) {
 	if c.guest != nil {
 		if err := c.guest.CloseConnection(); err != nil {
 			log.G(ctx).WithError(err).Warn("close guest connection after vm exit failed")
+		}
+	}
+	if c.transport != nil {
+		if err := c.transport.Close(); err != nil {
+			log.G(ctx).WithError(err).Warn("close VM transport after vm exit failed")
 		}
 	}
 
@@ -581,23 +625,35 @@ func (c *Controller) Stats(ctx context.Context) (*stats.VirtualMachineStatistics
 	return s, nil
 }
 
-// TerminateVM forcefully terminates a running VM, closes the guest connection,
-// and releases HCS resources.
-//
-// The context is used for all operations, including waits, so timeouts/cancellations may prevent
-// proper UVM cleanup.
+// TerminateVM terminates the VM and releases its resources.
 func (c *Controller) TerminateVM(ctx context.Context) (err error) {
 	ctx, _ = log.WithContext(ctx, logrus.WithField(logfields.Operation, "TerminateVM"))
 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// If the VM has already terminated, we can skip termination and just return.
-	// Alternatively, if the VM was never created, we can also skip termination.
-	// This makes the TerminateVM operation idempotent.
-	if c.vmState == StateTerminated || c.vmState == StateNotCreated {
+	// Terminal guest state and completed host cleanup are separate. A natural exit reaches
+	// StateTerminated before the utility-VM handles are closed, and failed cleanup remains
+	// retryable. A never-created VM owns no resources. This makes TerminateVM idempotent.
+	if c.vmState == StateNotCreated || c.vmState == StateTerminated && c.resourcesClosed {
 		return nil
 	}
+
+	// The factory is closed on every exit from here.
+	defer func() {
+		transportClosed := true
+		if c.transport != nil {
+			if closeErr := c.transport.Close(); closeErr != nil {
+				transportClosed = false
+				if err == nil {
+					err = fmt.Errorf("failed to close VM transport: %w", closeErr)
+				} else {
+					log.G(ctx).WithError(closeErr).Warn("close VM transport after termination failure failed")
+				}
+			}
+		}
+		c.resourcesClosed = err == nil && transportClosed
+	}()
 
 	// Destination migration after Import but before CreateVM: no HCS handle yet.
 	if c.uvm == nil {
@@ -610,19 +666,21 @@ func (c *Controller) TerminateVM(ctx context.Context) (err error) {
 
 	// Explicitly set migrating to false so that we release
 	// the bridge prior to removing the VM.
-	c.guest.SetMigrating(false)
+	if c.guest != nil {
+		c.guest.SetMigrating(false)
+	}
 
-	// Skip HCS Terminate for a never-started VM (cold-created, or a destination
-	// migration VM created/patched but not yet started). The HCS document sets
-	// ShouldTerminateOnLastHandleClosed, so uvm.Close below is sufficient.
-	if c.vmState != StateCreated &&
+	// Skip Terminate for a never-started VM; closing the compute system is sufficient.
+	if c.vmState != StateCreated && c.vmState != StateTerminated &&
 		c.vmState != StateDestinationMigrationCreated && c.vmState != StateDestinationMigrationPatched {
 		// Terminate the utility VM. This will also cause the Wait() call in the background goroutine to unblock.
 		_ = c.uvm.Terminate(ctx)
 	}
 
-	if err := c.guest.CloseConnection(); err != nil {
-		log.G(ctx).Errorf("close guest connection failed: %s", err)
+	if c.guest != nil {
+		if err := c.guest.CloseConnection(); err != nil {
+			log.G(ctx).Errorf("close guest connection failed: %s", err)
+		}
 	}
 
 	err = c.uvm.Close(ctx)

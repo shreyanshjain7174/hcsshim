@@ -67,11 +67,15 @@ type Service struct {
 var _ shim.TTRPCService = (*Service)(nil)
 
 // NewService creates a new instance of the Service with the shared state.
-func NewService(ctx context.Context, eventsPublisher shim.Publisher, sd shutdown.Service) *Service {
+func NewService(ctx context.Context, eventsPublisher shim.Publisher, sd shutdown.Service) (*Service, error) {
+	vmController, err := newVMController()
+	if err != nil {
+		return nil, err
+	}
 	svc := &Service{
 		publisher:           eventsPublisher,
 		events:              make(chan interface{}, 128), // Buffered channel for events
-		vmController:        vm.New(),
+		vmController:        vmController,
 		podControllers:      make(map[string]*pod.Controller),
 		containerPodMapping: make(map[string]string),
 		migrationController: migration.New(),
@@ -93,7 +97,7 @@ func NewService(ctx context.Context, eventsPublisher shim.Publisher, sd shutdown
 		return nil
 	})
 
-	return svc
+	return svc, nil
 }
 
 // RegisterTTRPC registers the Task, Sandbox, and ShimDiag TTRPC services on

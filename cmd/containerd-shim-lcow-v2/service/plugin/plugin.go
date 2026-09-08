@@ -79,11 +79,14 @@ func init() {
 			// 1. Sandbox service
 			// 2. Task service
 			// 3. Shimdiag service
-			svc = service.NewService(
+			svc, err = service.NewService(
 				ic.Context,
 				pp.(shim.Publisher),
 				ss.(shutdown.Service),
 			)
+			if err != nil {
+				return nil, err
+			}
 
 			return svc, nil
 		},

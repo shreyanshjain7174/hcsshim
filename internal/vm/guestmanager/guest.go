@@ -8,13 +8,13 @@ import (
 	"net"
 	"sync"
 
+	"github.com/Microsoft/go-winio/pkg/guid"
 	"github.com/Microsoft/hcsshim/internal/gcs"
 	"github.com/Microsoft/hcsshim/internal/log"
 	"github.com/Microsoft/hcsshim/internal/logfields"
+	"github.com/Microsoft/hcsshim/internal/vm/transport"
 	"github.com/Microsoft/hcsshim/internal/vm/vmmanager"
 
-	"github.com/Microsoft/go-winio"
-	"github.com/Microsoft/go-winio/pkg/guid"
 	"github.com/sirupsen/logrus"
 )
 
@@ -23,8 +23,6 @@ import (
 type uvm interface {
 	// ID returns the user-visible identifier for the Utility VM.
 	ID() string
-	// RuntimeID returns the Hyper-V VM GUID.
-	RuntimeID() guid.GUID
 	// Wait blocks until the VM exits or ctx is cancelled.
 	Wait(ctx context.Context) error
 	// ExitError returns the error that caused the VM to exit, if any.
@@ -43,7 +41,8 @@ type Guest struct {
 	log *logrus.Entry
 	// uvm is the utility VM that this GuestManager is managing.
 	// We restrict access to just the methods actually needed by this package.
-	uvm uvm
+	uvm       uvm
+	transport transport.Factory
 	// gc is the active GCS connection to the guest.
 	// It will be nil if no connection is active.
 	gc *gcs.GuestConnection
@@ -52,10 +51,11 @@ type Guest struct {
 }
 
 // New creates a new Guest Manager.
-func New(ctx context.Context, uvm uvm) *Guest {
+func New(ctx context.Context, uvm uvm, factory transport.Factory) *Guest {
 	return &Guest{
-		log: log.G(ctx).WithField(logfields.UVMID, uvm.ID()),
-		uvm: uvm,
+		log:       log.G(ctx).WithField(logfields.UVMID, uvm.ID()),
+		uvm:       uvm,
+		transport: factory,
 	}
 }
 
@@ -70,7 +70,7 @@ func WithInitializationState(state *gcs.InitialGuestState) ConfigOption {
 	}
 }
 
-// PrepareConnection opens the host-side hvsock listener for the given GCS
+// PrepareConnection opens the host-side guest transport listener for the given GCS
 // service ID. Must be called before VM start so the host is listening when
 // the in-VM GCS dials. Idempotent for the same service ID.
 func (gm *Guest) PrepareConnection(GCSServiceID guid.GUID) error {
@@ -85,10 +85,7 @@ func (gm *Guest) PrepareConnection(GCSServiceID guid.GUID) error {
 		return nil
 	}
 
-	l, err := winio.ListenHvsock(&winio.HvsockAddr{
-		VMID:      gm.uvm.RuntimeID(),
-		ServiceID: GCSServiceID,
-	})
+	l, err := gm.transport.ListenService(GCSServiceID)
 	if err != nil {
 		return fmt.Errorf("failed to listen for guest connection: %w", err)
 	}
@@ -126,7 +123,7 @@ func (gm *Guest) CreateConnection(ctx context.Context, coldStart bool, opts ...C
 	gcc := &gcs.GuestConnectionConfig{
 		Conn:     conn,
 		Log:      gm.log, // Ensure gm has a logger field
-		IoListen: gcs.HvsockIoListen(gm.uvm.RuntimeID()),
+		IoListen: gm.transport.ListenPort,
 	}
 
 	// Apply all passed options.
@@ -236,7 +233,7 @@ func (gm *Guest) IsBridgeConnected() bool {
 	return gm.gc.IsBridgeConnected()
 }
 
-// ResumeConnection accepts a fresh hvsock on the prepared listener and
+// ResumeConnection accepts a fresh guest transport connection on the prepared listener and
 // swaps it into the existing GCS bridge, preserving in-flight RPCs.
 func (gm *Guest) ResumeConnection(ctx context.Context) error {
 	gm.mu.Lock()
