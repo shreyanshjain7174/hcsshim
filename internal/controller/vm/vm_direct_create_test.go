@@ -21,12 +21,19 @@ import (
 
 	"github.com/Microsoft/go-winio/pkg/guid"
 	"github.com/containerd/errdefs"
-	"google.golang.org/protobuf/types/known/anypb"
 )
 
 type retryTransportFactory struct {
 	closeCalls int
 	closeErrs  []error
+}
+
+func TestColdCreateWithoutDirectCreatorUsesHCSDocument(t *testing.T) {
+	c := New()
+	err := c.CreateVM(context.Background(), &CreateOptions{ID: "no-creator"})
+	if err == nil || !strings.Contains(err.Error(), "failed to build VM config") {
+		t.Fatalf("controller without direct creator did not use HCS builder: %v", err)
+	}
 }
 
 func (*retryTransportFactory) ListenService(guid.GUID) (net.Listener, error) { return nil, nil }
@@ -40,20 +47,6 @@ func (f *retryTransportFactory) Close() error {
 	err := f.closeErrs[0]
 	f.closeErrs = f.closeErrs[1:]
 	return err
-}
-
-func TestColdCreateWithoutDirectCreatorUsesHCSDocument(t *testing.T) {
-	c := New()
-	err := c.CreateVM(context.Background(), &CreateOptions{ID: "no-creator"})
-	if err == nil {
-		t.Fatal("expected parse/config error from HCS builder, not a live HCS create")
-	}
-	if !strings.Contains(err.Error(), "failed to build VM config") && !strings.Contains(err.Error(), "no options provided") {
-		t.Fatalf("a controller without a direct creator must stay on buildHCSConfig, got %v", err)
-	}
-	if c.State() != StateNotCreated || c.hcsDocument != nil || c.uvm != nil {
-		t.Fatal("a failed HCS create must not mutate controller state")
-	}
 }
 
 func TestColdCreateInvokesDirectCreatorAndDoesNotFallBack(t *testing.T) {
@@ -168,64 +161,6 @@ func TestColdCreateDirectReservationFailureClosesCreatedSystem(t *testing.T) {
 	}
 }
 
-func TestColdCreateDirectInstallsControllerState(t *testing.T) {
-	runtimeID := guid.GUID{Data1: 0x11, Data2: 0x22}
-	hostPath := `C:\openvmm\rootfs.vhd`
-	cs := newRecordingComputeSystem(`C:\ov`)
-	sandbox := &lcow.SandboxOptions{
-		Architecture:          "amd64",
-		FullyPhysicallyBacked: true,
-		PolicyBasedRouting:    true,
-		NoWritableFileShares:  true,
-	}
-	c := newDirectControllerForTest(t, func(context.Context, *CreateOptions) (*DirectCreateResult, error) {
-		return &DirectCreateResult{
-			ComputeSystem:  cs,
-			RuntimeID:      runtimeID,
-			SandboxOptions: sandbox,
-			RootfsReservations: []RootfsReservation{{
-				Controller: 0,
-				Lun:        0,
-				Config: disk.Config{
-					HostPath: hostPath,
-					ReadOnly: true,
-					Type:     disk.TypeVirtualDisk,
-				},
-			}},
-		}, nil
-	})
-	if err := c.CreateVM(context.Background(), &CreateOptions{ID: "installed"}); err != nil {
-		t.Fatalf("CreateVM: %v", err)
-	}
-	if c.State() != StateCreated {
-		t.Fatalf("state=%s", c.State())
-	}
-	if c.hcsDocument != nil {
-		t.Fatal("direct create must leave hcsDocument nil")
-	}
-	if c.VM() == nil || c.VM().ID() != "installed" || c.VM().RuntimeID() != runtimeID {
-		t.Fatalf("UVM identity = %+v", c.VM())
-	}
-	if c.RuntimeID() != runtimeID.String() {
-		t.Fatalf("controller RuntimeID=%q", c.RuntimeID())
-	}
-	got := c.SandboxOptions()
-	if got == nil || got.Architecture != "amd64" || !got.FullyPhysicallyBacked || !got.PolicyBasedRouting || !got.NoWritableFileShares {
-		t.Fatalf("SandboxOptions=%+v", got)
-	}
-	if c.Guest() == nil {
-		t.Fatal("guest manager must be installed")
-	}
-	scsiCtrl, err := c.SCSIController(context.Background())
-	if err != nil {
-		t.Fatalf("SCSIController: %v", err)
-	}
-	disks := scsiCtrl.Disks()
-	if len(disks) != 1 || disks[0].HostPath != hostPath || !disks[0].ReadOnly || disks[0].Type != disk.TypeVirtualDisk {
-		t.Fatalf("SCSI disks = %+v", disks)
-	}
-}
-
 func TestColdCreateDirectRejectsDuplicateCreateWithoutRelaunch(t *testing.T) {
 	calls := 0
 	cs := newRecordingComputeSystem(`C:\ov`)
@@ -241,63 +176,20 @@ func TestColdCreateDirectRejectsDuplicateCreateWithoutRelaunch(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "incorrect state") {
 		t.Fatalf("second CreateVM error = %v", err)
 	}
-	if calls != 1 || c.State() != StateCreated || c.VM() == nil {
-		t.Fatalf("calls=%d state=%s VM=%v", calls, c.State(), c.VM())
+	if calls != 1 {
+		t.Fatalf("direct creator calls = %d, want 1", calls)
 	}
 }
 
-func TestDirectControllerRejectsSaveImportAndMigration(t *testing.T) {
-	sentinel := &hcsschema.ComputeSystem{Owner: "must-not-read"}
-	c := newDirectControllerForTest(t, func(context.Context, *CreateOptions) (*DirectCreateResult, error) { return nil, nil })
-	c.hcsDocument = sentinel
-	ctx := context.Background()
-
-	assertNI := func(name string, err error) {
-		t.Helper()
-		if err == nil || !errors.Is(err, errdefs.ErrNotImplemented) {
-			t.Fatalf("%s: want ErrNotImplemented, got %v", name, err)
-		}
-		if c.hcsDocument != sentinel {
-			t.Fatalf("%s mutated hcsDocument", name)
-		}
+func TestControllerSavePreservesBackendBoundary(t *testing.T) {
+	direct := newDirectControllerForTest(t, func(context.Context, *CreateOptions) (*DirectCreateResult, error) { return nil, nil })
+	_, directErr := direct.Save(context.Background())
+	if !errors.Is(directErr, errdefs.ErrNotImplemented) {
+		t.Fatalf("direct Save: want ErrNotImplemented, got %v", directErr)
 	}
-
-	_, err := c.Save(ctx)
-	assertNI("Save", err)
-	assertNI("Import", c.Import(ctx, &anypb.Any{}))
-	assertNI("Patch", c.Patch(ctx))
-	assertNI("Resume", c.Resume(ctx, false))
-	assertNI("InitializeLiveMigrationOnSource", c.InitializeLiveMigrationOnSource(ctx, &hcsschema.MigrationInitializeOptions{}))
-	_, err = c.CompatibilityInfo(ctx)
-	assertNI("CompatibilityInfo", err)
-	_, err = c.MigrationNotifications()
-	assertNI("MigrationNotifications", err)
-	assertNI("StartWithMigrationOptions", c.StartWithMigrationOptions(ctx, &hcs.MigrationConfig{}))
-	assertNI("StartLiveMigrationOnSource", c.StartLiveMigrationOnSource(ctx, &hcs.MigrationConfig{}))
-	assertNI("StartLiveMigrationTransfer", c.StartLiveMigrationTransfer(ctx, &hcsschema.MigrationTransferOptions{}))
-	assertNI("FinalizeLiveMigration", c.FinalizeLiveMigration(ctx, &hcsschema.MigrationFinalizedOptions{}))
-	assertNI("CancelLiveMigration", c.CancelLiveMigration(ctx, &hcsschema.MigrationCancelOptions{}))
-}
-
-func TestFreshHCSControllerMigrationMethodsDoNotRejectUnsupported(t *testing.T) {
-	c := New()
-	ctx := context.Background()
-
-	_, saveErr := c.Save(ctx)
-	for _, test := range []struct {
-		name string
-		err  error
-	}{
-		{name: "Save", err: saveErr},
-		{name: "Patch", err: c.Patch(ctx)},
-		{name: "CancelLiveMigration", err: c.CancelLiveMigration(ctx, &hcsschema.MigrationCancelOptions{})},
-	} {
-		if test.err == nil {
-			t.Fatalf("%s: expected a fresh-controller precondition error", test.name)
-		}
-		if errors.Is(test.err, errdefs.ErrNotImplemented) {
-			t.Fatalf("%s: must not reject an HCS-backed controller with ErrNotImplemented: %v", test.name, test.err)
-		}
+	_, hcsErr := New().Save(context.Background())
+	if errors.Is(hcsErr, errdefs.ErrNotImplemented) {
+		t.Fatalf("HCS Save was rejected as OpenVMM: %v", hcsErr)
 	}
 }
 

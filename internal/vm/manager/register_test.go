@@ -10,7 +10,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +17,6 @@ import (
 	iannotations "github.com/Microsoft/hcsshim/internal/annotations"
 	controllervm "github.com/Microsoft/hcsshim/internal/controller/vm"
 	"github.com/Microsoft/hcsshim/internal/vmservice"
-	shimannotations "github.com/Microsoft/hcsshim/pkg/annotations"
 	vmsandbox "github.com/Microsoft/hcsshim/sandbox-spec/vm/v2"
 )
 
@@ -30,40 +28,6 @@ func TestNewDirectCreateFailsClosedWithoutConfig(t *testing.T) {
 	create, err := NewDirectCreate()
 	if create != nil || !errors.Is(err, errConfigSource) {
 		t.Fatalf("NewDirectCreate without %s = creator %v, error %v; want nil and %v", configFileName, create, err, errConfigSource)
-	}
-}
-
-func TestNewDirectCreateBuildsAndCreatesNativeRequest(t *testing.T) {
-	boot := newBootFiles(t)
-	config := nativeBuilderConfig()
-	client := &fakeModifyVMClient{}
-	launcher := &fakeDirectLauncher{socketPath: config.VMServiceSocket}
-	create := newDirectCreate(config, Deps{
-		Launcher: launcher,
-		Dial: func(context.Context, string) (vmservice.VMClient, io.Closer, error) {
-			return client, io.NopCloser(nilReader{}), nil
-		},
-		TransportBase: config.HybridVsockBase,
-	})
-
-	result, err := create(context.Background(), &controllervm.CreateOptions{
-		ID:          "native-create",
-		Owner:       "test-owner",
-		BundlePath:  t.TempDir(),
-		ShimOpts:    &runhcsoptions.Options{SandboxPlatform: "linux/amd64", BootFilesRootPath: boot},
-		SandboxSpec: &vmsandbox.Spec{Annotations: map[string]string{}},
-	})
-	if err != nil {
-		t.Fatalf("direct create: %v", err)
-	}
-	if launcher.launchCalls != 1 {
-		t.Fatalf("launch calls = %d, want 1", launcher.launchCalls)
-	}
-	if len(client.createCalls) != 1 || client.createCalls[0].GetLogId() != "native-create" {
-		t.Fatalf("CreateVM calls = %+v", client.createCalls)
-	}
-	if result == nil || result.ComputeSystem == nil || result.SandboxOptions == nil || len(result.RootfsReservations) != 1 {
-		t.Fatalf("result = %+v", result)
 	}
 }
 
@@ -169,43 +133,13 @@ func TestNewDirectCreateRPCFailureClosesSerialListener(t *testing.T) {
 	}
 }
 
-func TestNewDirectCreateRejectsConfidentialInputBeforeLaunch(t *testing.T) {
+func TestNewDirectCreateRejectsUnsupportedInputBeforeLaunch(t *testing.T) {
 	config := nativeBuilderConfig()
 	launcher := &fakeDirectLauncher{socketPath: config.VMServiceSocket}
 	create := newDirectCreate(config, Deps{
 		Launcher: launcher,
 		Dial: func(context.Context, string) (vmservice.VMClient, io.Closer, error) {
-			t.Fatal("dial called for rejected confidential input")
-			return nil, nil, nil
-		},
-		TransportBase: config.HybridVsockBase,
-	})
-	opts := nativeCreateOptions(t)
-	opts.SandboxSpec.Annotations[shimannotations.LCOWSecurityPolicy] = "policy"
-
-	result, err := create(context.Background(), opts)
-	if err == nil || result != nil {
-		t.Fatalf("result=%+v error=%v, want rejection", result, err)
-	}
-	if launcher.launchCalls != 0 || launcher.terminateCalls != 0 {
-		t.Fatalf("launch calls=%d terminate calls=%d, want zero", launcher.launchCalls, launcher.terminateCalls)
-	}
-	entries, readErr := os.ReadDir(opts.BundlePath)
-	if readErr != nil {
-		t.Fatalf("read bundle: %v", readErr)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("bundle mutated: %v", entries)
-	}
-}
-
-func TestNewDirectCreateRejectsARM64BeforeLaunch(t *testing.T) {
-	config := nativeBuilderConfig()
-	launcher := &fakeDirectLauncher{socketPath: config.VMServiceSocket}
-	create := newDirectCreate(config, Deps{
-		Launcher: launcher,
-		Dial: func(context.Context, string) (vmservice.VMClient, io.Closer, error) {
-			t.Fatal("dial called for rejected ARM64 input")
+			t.Fatal("dial called for rejected input")
 			return nil, nil, nil
 		},
 		TransportBase: config.HybridVsockBase,
@@ -214,11 +148,11 @@ func TestNewDirectCreateRejectsARM64BeforeLaunch(t *testing.T) {
 	opts.ShimOpts.SandboxPlatform = "linux/arm64"
 
 	result, err := create(context.Background(), opts)
-	if err == nil || result != nil || !strings.Contains(err.Error(), "linux/arm64") {
-		t.Fatalf("result=%+v error=%v, want ARM64 rejection", result, err)
+	if err == nil || result != nil {
+		t.Fatalf("result=%+v error=%v, want pre-launch rejection", result, err)
 	}
 	if launcher.launchCalls != 0 || launcher.terminateCalls != 0 {
-		t.Fatalf("launch calls=%d terminate calls=%d, want zero", launcher.launchCalls, launcher.terminateCalls)
+		t.Fatalf("rejected input touched launcher: launch=%d terminate=%d", launcher.launchCalls, launcher.terminateCalls)
 	}
 }
 

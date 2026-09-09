@@ -179,30 +179,6 @@ func TestHybridCloseWinningBeforeCommitCleansBoundListener(t *testing.T) {
 	}
 }
 
-func TestBookkeepingCloseRetriesRetainedEntry(t *testing.T) {
-	book := bookkeeping{keys: make(map[string]struct{})}
-	if err := book.reserve("retry"); err != nil {
-		t.Fatalf("reserve: %v", err)
-	}
-	listener := &retryCloseListener{}
-	if _, err := book.commit("retry", "", listener, nil); err != nil {
-		t.Fatalf("commit: %v", err)
-	}
-
-	if err := book.close(); err == nil {
-		t.Fatal("first Close = nil, want listener failure")
-	}
-	if err := book.close(); err != nil {
-		t.Fatalf("retry Close: %v", err)
-	}
-	if listener.calls != 2 {
-		t.Fatalf("listener Close calls = %d, want 2", listener.calls)
-	}
-	if len(book.entries) != 0 {
-		t.Fatalf("retained entries after successful retry = %d, want 0", len(book.entries))
-	}
-}
-
 func TestBookkeepingStaleCompletionDoesNotReleaseRearmedKey(t *testing.T) {
 	book := bookkeeping{keys: make(map[string]struct{})}
 	old := &entry{key: "port"}

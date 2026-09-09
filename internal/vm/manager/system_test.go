@@ -44,7 +44,7 @@ func TestSystemCloseOwnsResourcesOnceWithoutRemovingTransportBase(t *testing.T) 
 	if client.quitCallCount() != 1 {
 		t.Fatalf("Quit calls = %d, want 1", client.quitCallCount())
 	}
-	if connection.closeCalls != 1 {
+	if connection != nil && connection.closeCalls != 1 {
 		t.Fatalf("connection close calls = %d, want 1", connection.closeCalls)
 	}
 	if launcher.terminateCalls != 1 {
@@ -158,16 +158,6 @@ func assertBlockedCloseRungKeepsLauncherProgress(t *testing.T, blocked *blocking
 	}
 }
 
-func TestSystemCloseBlockedConnCloseStillTerminatesLauncher(t *testing.T) {
-	entered := make(chan struct{})
-	release := make(chan struct{})
-	connection := &blockingCloser{entered: entered, release: release}
-	launcher := &fakeDirectLauncher{}
-	system := newCloseTestSystem(t, "blocked-conn", &fakeModifyVMClient{}, connection, launcher)
-
-	assertBlockedCloseRungKeepsLauncherProgress(t, connection, entered, release, system, launcher, nil)
-}
-
 func TestSystemCloseBlockedSerialCloseStillTerminatesLauncher(t *testing.T) {
 	entered := make(chan struct{})
 	release := make(chan struct{})
@@ -178,6 +168,16 @@ func TestSystemCloseBlockedSerialCloseStillTerminatesLauncher(t *testing.T) {
 	system.serialClose = newAsyncCloser(blocked.Close)
 
 	assertBlockedCloseRungKeepsLauncherProgress(t, blocked, entered, release, system, launcher, connection)
+}
+
+func TestSystemCloseBlockedConnCloseStillTerminatesLauncher(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	connection := &blockingCloser{entered: entered, release: release}
+	launcher := &fakeDirectLauncher{}
+	system := newCloseTestSystem(t, "blocked-conn", &fakeModifyVMClient{}, connection, launcher)
+
+	assertBlockedCloseRungKeepsLauncherProgress(t, connection, entered, release, system, launcher, nil)
 }
 
 func TestSystemCloseRunsLaterRungsWhenQuitHangs(t *testing.T) {

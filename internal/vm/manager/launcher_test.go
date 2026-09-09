@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -24,33 +25,34 @@ func shortLauncherSocketPath(t *testing.T) string {
 	return path
 }
 
-func TestStartProcessJobCreationFailureStartsNoChild(t *testing.T) {
-	want := errors.New("job creation failed")
-	oldCreate := createKillOnCloseJob
-	createKillOnCloseJob = func() (windows.Handle, error) { return 0, want }
-	t.Cleanup(func() { createKillOnCloseJob = oldCreate })
-
-	child, err := startProcess(`C:\definitely-missing-openvmm.exe`, nil)
-	if !errors.Is(err, want) || child != nil {
-		t.Fatalf("child=%v error=%v, want nil child wrapping %v", child, err, want)
-	}
-}
-
 func TestStartProcessAssignmentFailureReapsChild(t *testing.T) {
 	want := errors.New("assignment failed")
 	t.Setenv("GO_WANT_LAUNCHER_HELPER", "1")
 	oldCreate := createKillOnCloseJob
 	oldAssign := assignProcessToJob
+	var process *os.Process
 	createKillOnCloseJob = func() (windows.Handle, error) { return windows.Handle(1), nil }
-	assignProcessToJob = func(windows.Handle, *os.Process) error { return want }
+	assignProcessToJob = func(_ windows.Handle, child *os.Process) error {
+		process = child
+		return want
+	}
 	t.Cleanup(func() {
 		createKillOnCloseJob = oldCreate
 		assignProcessToJob = oldAssign
+		if process != nil {
+			_ = process.Kill()
+		}
 	})
 
 	child, err := startProcess(os.Args[0], []string{"-test.run=^TestLauncherHelperProcess$"})
 	if !errors.Is(err, want) || child != nil {
 		t.Fatalf("child=%v error=%v, want nil child wrapping %v", child, err, want)
+	}
+	if process == nil {
+		t.Fatal("assignment hook did not observe the child")
+	}
+	if err := process.Kill(); !errors.Is(err, os.ErrProcessDone) && !errors.Is(err, syscall.EINVAL) {
+		t.Fatalf("child survived failed job assignment: Kill = %v", err)
 	}
 }
 

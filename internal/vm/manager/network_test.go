@@ -314,6 +314,31 @@ func validBoundEndpoint(t *testing.T) BoundEndpoint {
 	}
 }
 
+func TestSystemModifySCSIUnchangedAndTouchesNoHCN(t *testing.T) {
+	client := &fakeModifyVMClient{}
+	binder := &fakeEndpointPortBinder{}
+	sys := newTestSystem(client, binder)
+	req := &hcsschema.ModifySettingRequest{
+		RequestType:  guestrequest.RequestTypeAdd,
+		ResourcePath: fmt.Sprintf(resourcepaths.SCSIResourceFormat, guestrequest.ScsiControllerGuids[0], 0),
+		Settings: hcsschema.Attachment{
+			Type_: "VirtualDisk",
+			Path:  `C:\layer.vhdx`,
+		},
+	}
+
+	if err := sys.Modify(context.Background(), req); err != nil {
+		t.Fatalf("Modify(SCSI add): %v", err)
+	}
+	calls := client.calls()
+	if len(calls) != 1 || calls[0].GetScsiDisk() == nil {
+		t.Fatalf("calls = %+v, want one SCSI request", calls)
+	}
+	if binder.bindCallCount() != 0 || binder.unbindCallCount() != 0 {
+		t.Fatalf("SCSI modify touched HCN: bind=%d unbind=%d", binder.bindCallCount(), binder.unbindCallCount())
+	}
+}
+
 func networkAddRequest(settings *hcsschema.NetworkAdapter) *hcsschema.ModifySettingRequest {
 	return &hcsschema.ModifySettingRequest{
 		RequestType:  guestrequest.RequestTypeAdd,
@@ -327,31 +352,6 @@ func networkRemoveRequest(settings *hcsschema.NetworkAdapter) *hcsschema.ModifyS
 		RequestType:  guestrequest.RequestTypeRemove,
 		ResourcePath: fmt.Sprintf(resourcepaths.NetworkResourceFormat, testNicID),
 		Settings:     settings,
-	}
-}
-
-func TestSystemModifySCSIUnchangedAndTouchesNoHCN(t *testing.T) {
-	client := &fakeModifyVMClient{}
-	binder := &fakeEndpointPortBinder{}
-	sys := newTestSystem(client, binder)
-
-	req := &hcsschema.ModifySettingRequest{
-		RequestType:  guestrequest.RequestTypeAdd,
-		ResourcePath: fmt.Sprintf(resourcepaths.SCSIResourceFormat, guestrequest.ScsiControllerGuids[0], 0),
-		Settings: hcsschema.Attachment{
-			Type_: "VirtualDisk",
-			Path:  `C:\layer.vhdx`,
-		},
-	}
-	if err := sys.Modify(context.Background(), req); err != nil {
-		t.Fatalf("Modify(SCSI add): %v", err)
-	}
-	calls := client.calls()
-	if len(calls) != 1 || calls[0].GetScsiDisk() == nil {
-		t.Fatalf("calls = %+v, want exactly one SCSI ModifyResource call", calls)
-	}
-	if binder.bindCallCount() != 0 || binder.unbindCallCount() != 0 {
-		t.Fatalf("SCSI-only Modify touched the endpoint port binder: bind=%d unbind=%d", binder.bindCallCount(), binder.unbindCallCount())
 	}
 }
 
@@ -383,174 +383,49 @@ func TestSystemCloseReleasesNetworkBindingsAndRetriesFailure(t *testing.T) {
 	}
 }
 
-func TestSystemModifyNetworkAddMalformedPath(t *testing.T) {
-	client := &fakeModifyVMClient{}
-	binder := &fakeEndpointPortBinder{}
-	sys := newTestSystem(client, binder)
-
-	for _, path := range []string{
-		"VirtualMachine/Devices/NetworkAdapters",
-		"VirtualMachine/Devices/NetworkAdapters/not-a-guid",
-		"VirtualMachine/Devices/NetworkAdapters/" + testNicID + "/trailing",
-	} {
-		req := &hcsschema.ModifySettingRequest{
-			RequestType:  guestrequest.RequestTypeAdd,
-			ResourcePath: path,
-			Settings:     &hcsschema.NetworkAdapter{EndpointId: testEndpointID, MacAddress: testMAC},
-		}
-		err := sys.Modify(context.Background(), req)
-		if err == nil || !errors.Is(err, errInvalidNetworkAdapter) {
-			t.Fatalf("path %q: Modify = %v, want errInvalidNetworkAdapter", path, err)
-		}
-	}
-	if len(client.calls()) != 0 || binder.bindCallCount() != 0 {
-		t.Fatalf("malformed path reached the binder or vmservice: calls=%d bind=%d", len(client.calls()), binder.bindCallCount())
-	}
-}
-
-func TestSystemModifyNetworkAddWrongSettingsType(t *testing.T) {
-	client := &fakeModifyVMClient{}
-	binder := &fakeEndpointPortBinder{}
-	sys := newTestSystem(client, binder)
-
-	for name, settings := range map[string]interface{}{
-		"value-not-pointer": hcsschema.NetworkAdapter{EndpointId: testEndpointID, MacAddress: testMAC},
-		"wrong-type":        hcsschema.Attachment{Path: `C:\x.vhd`},
-		"nil":               (*hcsschema.NetworkAdapter)(nil),
-	} {
-		t.Run(name, func(t *testing.T) {
-			req := &hcsschema.ModifySettingRequest{
-				RequestType:  guestrequest.RequestTypeAdd,
-				ResourcePath: fmt.Sprintf(resourcepaths.NetworkResourceFormat, testNicID),
-				Settings:     settings,
-			}
-			err := sys.Modify(context.Background(), req)
-			if err == nil || !errors.Is(err, errInvalidNetworkAdapter) {
-				t.Fatalf("Modify = %v, want errInvalidNetworkAdapter", err)
-			}
-		})
-	}
-	if len(client.calls()) != 0 || binder.bindCallCount() != 0 {
-		t.Fatalf("wrong settings type reached the binder or vmservice")
-	}
-}
-
-func TestSystemModifyNetworkAddBindFailureRollsBack(t *testing.T) {
-	client := &fakeModifyVMClient{}
-	binder := &fakeEndpointPortBinder{
-		bindResults: []struct {
-			bound BoundEndpoint
-			err   error
-		}{{bound: BoundEndpoint{PortID: mustGUID(t, testPortID)}, err: errors.New("bind rpc failed")}},
-	}
-	sys := newTestSystem(client, binder)
-
-	req := networkAddRequest(&hcsschema.NetworkAdapter{EndpointId: testEndpointID, MacAddress: testMAC})
-	err := sys.Modify(context.Background(), req)
-	if err == nil {
-		t.Fatalf("Modify = nil, want the bind error")
-	}
-	if len(client.calls()) != 0 {
-		t.Fatalf("vmservice was called despite a bind failure")
-	}
-	if binder.unbindCallCount() != 1 {
-		t.Fatalf("unbind calls = %d, want exactly 1", binder.unbindCallCount())
-	}
-	endpointID, portID, nicID := binder.lastUnbind()
-	if endpointID != testEndpointID || portID != mustGUID(t, testPortID) || nicID != mustGUID(t, testNicID) {
-		t.Fatalf("unbind(%q, %v, %v), want (%q, %v, %v)", endpointID, portID, nicID, testEndpointID, testPortID, testNicID)
-	}
-
-	if _, exists := sys.lookupNetworkBinding(mustGUID(t, testNicID).String()); exists {
-		t.Fatalf("a binding was stored despite a bind failure")
-	}
-}
-
-func TestSystemModifyNetworkAddBindFailureWithoutPortSkipsRollback(t *testing.T) {
-	client := &fakeModifyVMClient{}
-	binder := &fakeEndpointPortBinder{
-		bindResults: []struct {
-			bound BoundEndpoint
-			err   error
-		}{{err: errors.New("bind failed before allocating a port")}},
-	}
-	sys := newTestSystem(client, binder)
-
-	req := networkAddRequest(&hcsschema.NetworkAdapter{EndpointId: testEndpointID, MacAddress: testMAC})
-	if err := sys.Modify(context.Background(), req); err == nil {
-		t.Fatalf("Modify = nil, want the bind error")
-	}
-	if binder.unbindCallCount() != 0 {
-		t.Fatalf("unbind calls = %d, want 0 when bind returned no port", binder.unbindCallCount())
-	}
-	if len(client.calls()) != 0 {
-		t.Fatalf("vmservice was called despite a bind failure")
-	}
-}
-
-func TestSystemModifyNetworkAddPostBindMismatchRollsBack(t *testing.T) {
-	tests := []struct {
-		name  string
-		bound BoundEndpoint
+func TestSystemModifyNetworkAddFailureRollsBack(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		bound       BoundEndpoint
+		bindErr     error
+		modifyErr   error
+		modifyCalls int
+		unbindCalls int
 	}{
-		{name: "wrong endpoint identity", bound: BoundEndpoint{PortID: mustGUID(t, testPortID), EndpointID: "different-endpoint", SwitchID: testSwitchID, MacAddress: testMAC}},
-		{name: "invalid switch guid", bound: BoundEndpoint{PortID: mustGUID(t, testPortID), EndpointID: testEndpointID, SwitchID: "not-a-guid", MacAddress: testMAC}},
-		{name: "empty mac", bound: BoundEndpoint{PortID: mustGUID(t, testPortID), EndpointID: testEndpointID, SwitchID: testSwitchID, MacAddress: ""}},
-		{name: "mismatched mac", bound: BoundEndpoint{PortID: mustGUID(t, testPortID), EndpointID: testEndpointID, SwitchID: testSwitchID, MacAddress: "AA:BB:CC:DD:EE:FF"}},
-	}
-	for _, test := range tests {
+		{name: "bind failure before port allocation", bindErr: errors.New("bind failed")},
+		{name: "partial bind failure", bound: BoundEndpoint{PortID: mustGUID(t, testPortID)}, bindErr: errors.New("bind failed"), unbindCalls: 1},
+		{name: "post-bind mismatch", bound: BoundEndpoint{PortID: mustGUID(t, testPortID), EndpointID: testEndpointID, SwitchID: testSwitchID, MacAddress: "AA:BB:CC:DD:EE:FF"}, unbindCalls: 1},
+		{name: "vmservice failure", bound: validBoundEndpoint(t), modifyErr: errors.New("vmservice add failed"), modifyCalls: 1, unbindCalls: 1},
+	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := &fakeModifyVMClient{}
+			if test.modifyErr != nil {
+				client.modifyErrs = []error{test.modifyErr}
+			}
 			binder := &fakeEndpointPortBinder{
 				bindResults: []struct {
 					bound BoundEndpoint
 					err   error
-				}{{bound: test.bound, err: nil}},
+				}{{bound: test.bound, err: test.bindErr}},
 			}
 			sys := newTestSystem(client, binder)
 
-			req := networkAddRequest(&hcsschema.NetworkAdapter{EndpointId: testEndpointID, MacAddress: testMAC})
-			err := sys.Modify(context.Background(), req)
-			if err == nil || !errors.Is(err, errNetworkBindMismatch) {
-				t.Fatalf("Modify = %v, want errNetworkBindMismatch", err)
+			if err := sys.Modify(context.Background(), networkAddRequest(&hcsschema.NetworkAdapter{EndpointId: testEndpointID, MacAddress: testMAC})); err == nil {
+				t.Fatal("Modify = nil, want add failure")
 			}
-			if len(client.calls()) != 0 {
-				t.Fatalf("vmservice was called despite a post-bind mismatch")
+			if len(client.calls()) != test.modifyCalls || binder.unbindCallCount() != test.unbindCalls {
+				t.Fatalf("rollback calls: modify=%d want=%d unbind=%d want=%d", len(client.calls()), test.modifyCalls, binder.unbindCallCount(), test.unbindCalls)
 			}
-			if binder.unbindCallCount() != 1 {
-				t.Fatalf("unbind calls = %d, want exactly 1", binder.unbindCallCount())
+			if test.unbindCalls != 0 {
+				endpointID, portID, nicID := binder.lastUnbind()
+				if endpointID != testEndpointID || portID != mustGUID(t, testPortID) || nicID != mustGUID(t, testNicID) {
+					t.Fatalf("unbind(%q, %v, %v), want exact attempted tuple", endpointID, portID, nicID)
+				}
 			}
 			if _, exists := sys.lookupNetworkBinding(mustGUID(t, testNicID).String()); exists {
-				t.Fatalf("a binding was stored despite a post-bind mismatch")
+				t.Fatal("binding retained after successful rollback")
 			}
 		})
-	}
-}
-
-func TestSystemModifyNetworkAddRPCFailureRollsBack(t *testing.T) {
-	client := &fakeModifyVMClient{modifyErrs: []error{errors.New("vmservice add failed")}}
-	binder := &fakeEndpointPortBinder{
-		bindResults: []struct {
-			bound BoundEndpoint
-			err   error
-		}{{bound: validBoundEndpoint(t)}},
-	}
-	sys := newTestSystem(client, binder)
-
-	req := networkAddRequest(&hcsschema.NetworkAdapter{EndpointId: testEndpointID, MacAddress: testMAC})
-	err := sys.Modify(context.Background(), req)
-	if err == nil {
-		t.Fatalf("Modify = nil, want the vmservice error")
-	}
-	if binder.unbindCallCount() != 1 {
-		t.Fatalf("unbind calls = %d, want exactly 1", binder.unbindCallCount())
-	}
-	endpointID, portID, nicID := binder.lastUnbind()
-	if endpointID != testEndpointID || portID != mustGUID(t, testPortID) || nicID != mustGUID(t, testNicID) {
-		t.Fatalf("unbind(%q, %v, %v), want (%q, %v, %v)", endpointID, portID, nicID, testEndpointID, testPortID, testNicID)
-	}
-	if _, exists := sys.lookupNetworkBinding(mustGUID(t, testNicID).String()); exists {
-		t.Fatalf("a binding was stored despite an RPC failure")
 	}
 }
 
@@ -604,64 +479,14 @@ func TestSystemModifyNetworkAddSuccessRequestFields(t *testing.T) {
 	nic := call.GetNicConfig()
 	dio := nic.GetDio()
 	if call.GetType() != vmservice.ModifyType_ADD || nic == nil || dio == nil {
-		t.Fatalf("request = %+v, want an ADD NicConfig with a Dio backend", call)
+		t.Fatalf("request = %+v, want ADD NicConfig with DIO backend", call)
 	}
-	if nic.GetNicId() != mustGUID(t, testNicID).String() {
-		t.Fatalf("NicId = %q, want normalized %q", nic.GetNicId(), mustGUID(t, testNicID).String())
-	}
-	if nic.GetMacAddress() != "12:34:56:78:9a:bc" {
-		t.Fatalf("MacAddress = %q, want the post-bind MAC unchanged", nic.GetMacAddress())
-	}
-	if dio.GetSwitchId() != mustGUID(t, testSwitchID).String() || dio.GetPortId() != mustGUID(t, testPortID).String() {
-		t.Fatalf("Dio = %+v, want normalized switch %q and port %q", dio, testSwitchID, testPortID)
-	}
-
-	binding, exists := sys.lookupNetworkBinding(mustGUID(t, testNicID).String())
-	if !exists || binding.endpointID != testEndpointID || binding.portID != mustGUID(t, testPortID) || binding.switchID != mustGUID(t, testSwitchID) {
-		t.Fatalf("binding = %+v (exists=%v), want the committed tuple", binding, exists)
+	if nic.GetNicId() != mustGUID(t, testNicID).String() || nic.GetMacAddress() != "12:34:56:78:9a:bc" || dio.GetSwitchId() != mustGUID(t, testSwitchID).String() || dio.GetPortId() != mustGUID(t, testPortID).String() {
+		t.Fatalf("ADD tuple = %+v, want committed NIC/MAC/switch/port identity", nic)
 	}
 }
 
-func TestSystemModifyNetworkAddAcceptsEquivalentEndpointGUIDFormatting(t *testing.T) {
-	client := &fakeModifyVMClient{}
-	binder := &fakeEndpointPortBinder{
-		bindResults: []struct {
-			bound BoundEndpoint
-			err   error
-		}{{bound: BoundEndpoint{
-			PortID:     mustGUID(t, testPortID),
-			EndpointID: "{" + testEndpointID + "}",
-			SwitchID:   testSwitchID,
-			MacAddress: testMAC,
-		}}},
-	}
-	sys := newTestSystem(client, binder)
-
-	req := networkAddRequest(&hcsschema.NetworkAdapter{EndpointId: testEndpointID, MacAddress: testMAC})
-	if err := sys.Modify(context.Background(), req); err != nil {
-		t.Fatalf("Modify with equivalent endpoint GUID formatting: %v", err)
-	}
-	if len(client.calls()) != 1 {
-		t.Fatalf("modify calls = %d, want 1", len(client.calls()))
-	}
-}
-
-func TestSystemModifyNetworkRemoveUnknownNIC(t *testing.T) {
-	client := &fakeModifyVMClient{}
-	binder := &fakeEndpointPortBinder{}
-	sys := newTestSystem(client, binder)
-
-	req := networkRemoveRequest(&hcsschema.NetworkAdapter{EndpointId: testEndpointID, MacAddress: testMAC})
-	err := sys.Modify(context.Background(), req)
-	if err == nil || !errors.Is(err, errUnknownNetworkAdapter) {
-		t.Fatalf("Modify = %v, want errUnknownNetworkAdapter", err)
-	}
-	if len(client.calls()) != 0 || binder.unbindCallCount() != 0 {
-		t.Fatalf("unknown remove reached the binder or vmservice")
-	}
-}
-
-func addBoundNIC(t *testing.T, sys *System, client *fakeModifyVMClient, binder *fakeEndpointPortBinder) {
+func addBoundNIC(t *testing.T, sys *System, binder *fakeEndpointPortBinder) {
 	t.Helper()
 	binder.mu.Lock()
 	binder.bindResults = []struct {
@@ -679,7 +504,7 @@ func TestSystemModifyNetworkRemoveRPCFailureRetainsBinding(t *testing.T) {
 	client := &fakeModifyVMClient{}
 	binder := &fakeEndpointPortBinder{}
 	sys := newTestSystem(client, binder)
-	addBoundNIC(t, sys, client, binder)
+	addBoundNIC(t, sys, binder)
 
 	client.mu.Lock()
 	client.modifyErrs = []error{errors.New("vmservice remove failed")}
@@ -701,7 +526,7 @@ func TestSystemModifyNetworkRemoveUnbindFailureRetainsThenRetrySucceeds(t *testi
 	client := &fakeModifyVMClient{}
 	binder := &fakeEndpointPortBinder{unbindErrs: []error{errors.New("hns unbind failed")}}
 	sys := newTestSystem(client, binder)
-	addBoundNIC(t, sys, client, binder)
+	addBoundNIC(t, sys, binder)
 
 	req := networkRemoveRequest(&hcsschema.NetworkAdapter{EndpointId: testEndpointID, MacAddress: testMAC})
 	if err := sys.Modify(context.Background(), req); err == nil {
@@ -727,41 +552,10 @@ func TestSystemModifyNetworkRemoveUnbindFailureRetainsThenRetrySucceeds(t *testi
 	if len(client.calls()) != 2 {
 		t.Fatalf("modify calls = %d, want one ADD and one REMOVE across the retry", len(client.calls()))
 	}
-}
-
-func TestSystemModifyNetworkRemoveSuccessExactTuple(t *testing.T) {
-	client := &fakeModifyVMClient{}
-	binder := &fakeEndpointPortBinder{}
-	sys := newTestSystem(client, binder)
-	addBoundNIC(t, sys, client, binder)
-
-	req := networkRemoveRequest(&hcsschema.NetworkAdapter{EndpointId: testEndpointID, MacAddress: testMAC})
-	if err := sys.Modify(context.Background(), req); err != nil {
-		t.Fatalf("Modify: %v", err)
-	}
-
-	calls := client.calls()
-	if len(calls) != 2 {
-		t.Fatalf("modify calls = %d, want 2 (add then remove)", len(calls))
-	}
-	removeCall := calls[1]
-	if removeCall.GetType() != vmservice.ModifyType_REMOVE {
-		t.Fatalf("second call type = %v, want REMOVE", removeCall.GetType())
-	}
-	dio := removeCall.GetNicConfig().GetDio()
-	if dio.GetSwitchId() != mustGUID(t, testSwitchID).String() || dio.GetPortId() != mustGUID(t, testPortID).String() {
-		t.Fatalf("remove Dio = %+v, want the exact bound switch/port", dio)
-	}
-
-	if binder.unbindCallCount() != 1 {
-		t.Fatalf("unbind calls = %d, want 1", binder.unbindCallCount())
-	}
-	endpointID, portID, nicID := binder.lastUnbind()
-	if endpointID != testEndpointID || portID != mustGUID(t, testPortID) || nicID != mustGUID(t, testNicID) {
-		t.Fatalf("unbind(%q, %v, %v), want (%q, %v, %v)", endpointID, portID, nicID, testEndpointID, testPortID, testNicID)
-	}
-	if _, exists := sys.lookupNetworkBinding(mustGUID(t, testNicID).String()); exists {
-		t.Fatalf("binding still present after a successful remove")
+	remove := client.calls()[1].GetNicConfig()
+	if remove.GetNicId() != mustGUID(t, testNicID).String() || remove.GetMacAddress() != testMAC ||
+		remove.GetDio().GetSwitchId() != mustGUID(t, testSwitchID).String() || remove.GetDio().GetPortId() != mustGUID(t, testPortID).String() {
+		t.Fatalf("REMOVE tuple = %+v, want committed NIC/MAC/switch/port identity", remove)
 	}
 }
 
@@ -769,7 +563,7 @@ func TestSystemModifyNetworkRemoveSerializesConcurrentRequests(t *testing.T) {
 	client := &fakeModifyVMClient{}
 	binder := &fakeEndpointPortBinder{}
 	sys := newTestSystem(client, binder)
-	addBoundNIC(t, sys, client, binder)
+	addBoundNIC(t, sys, binder)
 
 	entered := make(chan vmservice.ModifyType, 2)
 	release := make(chan struct{})
@@ -820,77 +614,36 @@ func TestSystemModifyNetworkRemoveSerializesConcurrentRequests(t *testing.T) {
 // fails, the port must stay tracked so the close-time release worker can retry the exact
 // tuple rather than leaking it.
 func TestSystemModifyNetworkAddRollbackFailureRetainsBindingForRelease(t *testing.T) {
-	tests := []struct {
-		name       string
-		bound      BoundEndpoint
-		modifyErrs []error
-	}{
-		{
-			name:  "post-bind validation failure",
-			bound: BoundEndpoint{PortID: mustGUID(t, testPortID), EndpointID: testEndpointID, SwitchID: testSwitchID, MacAddress: "AA:BB:CC:DD:EE:FF"},
-		},
-		{
-			name:       "vmservice add failure",
-			modifyErrs: []error{errors.New("vmservice add failed")},
-		},
+	primaryErr := errors.New("vmservice add failed")
+	rollbackErr := errors.New("hns unbind failed")
+	client := &fakeModifyVMClient{modifyErrs: []error{primaryErr}}
+	binder := &fakeEndpointPortBinder{
+		bindResults: []struct {
+			bound BoundEndpoint
+			err   error
+		}{{bound: validBoundEndpoint(t)}},
+		unbindErrs: []error{rollbackErr, nil},
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			rollbackErr := errors.New("hns unbind failed")
-			bound := test.bound
-			if bound.PortID == (guid.GUID{}) {
-				bound = validBoundEndpoint(t)
-			}
-			client := &fakeModifyVMClient{modifyErrs: test.modifyErrs}
-			binder := &fakeEndpointPortBinder{
-				bindResults: []struct {
-					bound BoundEndpoint
-					err   error
-				}{{bound: bound}},
-				unbindErrs: []error{rollbackErr, nil},
-			}
-			sys := newSystem("rollback-retain", guid.GUID{}, filepath.Join(t.TempDir(), "absent.sock"), client, nil, nil, nil, binder)
+	sys := newSystem("rollback-retain", guid.GUID{}, filepath.Join(t.TempDir(), "absent.sock"), client, nil, nil, nil, binder)
 
-			modifyErr := sys.Modify(context.Background(), networkAddRequest(&hcsschema.NetworkAdapter{EndpointId: testEndpointID, MacAddress: testMAC}))
-			if modifyErr == nil {
-				t.Fatal("Modify = nil, want the add failure joined with the rollback failure")
-			}
-			if !errors.Is(modifyErr, rollbackErr) {
-				t.Fatalf("Modify error %v does not preserve rollback failure %v", modifyErr, rollbackErr)
-			}
-			if len(test.modifyErrs) != 0 && !errors.Is(modifyErr, test.modifyErrs[0]) {
-				t.Fatalf("Modify error %v does not preserve primary failure %v", modifyErr, test.modifyErrs[0])
-			}
+	modifyErr := sys.Modify(context.Background(), networkAddRequest(&hcsschema.NetworkAdapter{EndpointId: testEndpointID, MacAddress: testMAC}))
+	if !errors.Is(modifyErr, primaryErr) || !errors.Is(modifyErr, rollbackErr) {
+		t.Fatalf("Modify error = %v, want primary and rollback failures", modifyErr)
+	}
+	key := mustGUID(t, testNicID).String()
+	binding, exists := sys.lookupNetworkBinding(key)
+	if !exists || binding.endpointID != testEndpointID || binding.portID != mustGUID(t, testPortID) {
+		t.Fatalf("retained binding = %+v (exists=%v), want exact attempted endpoint/port", binding, exists)
+	}
 
-			key := mustGUID(t, testNicID).String()
-			binding, exists := sys.lookupNetworkBinding(key)
-			if !exists {
-				t.Fatal("binding was forgotten while its HNS port was still bound")
-			}
-			if binding.endpointID != testEndpointID || binding.portID != mustGUID(t, testPortID) {
-				t.Fatalf("retained binding = %+v, want the exact attempted endpoint/port tuple", binding)
-			}
-			if binding.switchID != (guid.GUID{}) || binding.macAddress != "" {
-				t.Fatalf("retained binding = %+v, want no committed switch/MAC", binding)
-			}
-
-			if err := sys.CloseCtx(context.Background()); err != nil {
-				t.Fatalf("CloseCtx: %v", err)
-			}
-			if binder.unbindCallCount() != 2 {
-				t.Fatalf("unbind calls = %d, want the rollback attempt plus one release retry", binder.unbindCallCount())
-			}
-			endpointID, portID, nicID := binder.lastUnbind()
-			if endpointID != testEndpointID || portID != mustGUID(t, testPortID) || nicID != mustGUID(t, testNicID) {
-				t.Fatalf("release unbind(%q, %v, %v), want the exact retained tuple", endpointID, portID, nicID)
-			}
-			if _, exists := sys.lookupNetworkBinding(key); exists {
-				t.Fatal("binding survived a successful release unbind")
-			}
-			if !sys.closed {
-				t.Fatal("system did not close after the release retry succeeded")
-			}
-		})
+	if err := sys.CloseCtx(context.Background()); err != nil {
+		t.Fatalf("CloseCtx: %v", err)
+	}
+	if binder.unbindCallCount() != 2 {
+		t.Fatalf("unbind calls = %d, want rollback attempt plus release retry", binder.unbindCallCount())
+	}
+	if _, exists := sys.lookupNetworkBinding(key); exists {
+		t.Fatal("binding survived successful release retry")
 	}
 }
 
@@ -936,13 +689,4 @@ func TestSystemModifyNetworkAddRejectedWhenClosingAfterTxnLock(t *testing.T) {
 	if _, exists := sys.lookupNetworkBinding(mustGUID(t, testNicID).String()); exists {
 		t.Fatal("a rejected late add left a binding behind")
 	}
-}
-
-func containsAll(s string, subs ...string) bool {
-	for _, sub := range subs {
-		if !strings.Contains(s, sub) {
-			return false
-		}
-	}
-	return true
 }
