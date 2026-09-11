@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"github.com/Microsoft/hcsshim/hcn"
+	"github.com/Microsoft/hcsshim/internal/hns"
 
 	"github.com/Microsoft/go-winio/pkg/guid"
 )
@@ -49,13 +50,24 @@ func (hcnEndpointPortBinder) Bind(_ context.Context, endpointID string, nicID gu
 	if err != nil {
 		return BoundEndpoint{PortID: portID}, fmt.Errorf("failed to requery endpoint %s after binding port %s: %w", endpointID, portID, err)
 	}
+	network, err := hns.GetHNSNetworkByID(endpoint.HostComputeNetwork)
+	if err != nil {
+		return BoundEndpoint{PortID: portID}, fmt.Errorf("failed to resolve switch for endpoint %s on network %s: %w", endpointID, endpoint.HostComputeNetwork, err)
+	}
 
 	return BoundEndpoint{
 		PortID:     portID,
 		EndpointID: endpoint.Id,
-		SwitchID:   endpoint.HostComputeNetwork,
+		SwitchID:   endpointSwitchID(endpoint, network),
 		MacAddress: endpoint.MacAddress,
 	}, nil
+}
+
+func endpointSwitchID(endpoint *hcn.HostComputeEndpoint, network *hns.HNSNetwork) string {
+	if network.SwitchGuid != "" {
+		return network.SwitchGuid
+	}
+	return endpoint.HostComputeNetwork
 }
 
 func (hcnEndpointPortBinder) Unbind(_ context.Context, endpointID string, portID guid.GUID, nicID guid.GUID) error {
