@@ -4347,9 +4347,12 @@ func (x *WindowsPCIDevice) GetInstanceId() string {
 }
 
 type VirtioFSConfig struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Tag           string                 `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
-	RootPath      string                 `protobuf:"bytes,2,opt,name=root_path,json=rootPath,proto3" json:"root_path,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Tag      string                 `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
+	RootPath string                 `protobuf:"bytes,2,opt,name=root_path,json=rootPath,proto3" json:"root_path,omitempty"`
+	// Defaults to false (writable). Servers predating this field ignore it, so
+	// clients requiring read-only enforcement must use a compatible server.
+	ReadOnly      bool `protobuf:"varint,3,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4396,6 +4399,13 @@ func (x *VirtioFSConfig) GetRootPath() string {
 		return x.RootPath
 	}
 	return ""
+}
+
+func (x *VirtioFSConfig) GetReadOnly() bool {
+	if x != nil {
+		return x.ReadOnly
+	}
+	return false
 }
 
 type VirtioConsoleConfig struct {
@@ -5452,10 +5462,11 @@ const file_vmservice_proto_rawDesc = "" +
 	"\x05ports\x18\x02 \x03(\v2\x15.vmservice.PortConfigR\x05ports\"3\n" +
 	"\x10WindowsPCIDevice\x12\x1f\n" +
 	"\vinstance_id\x18\x01 \x01(\tR\n" +
-	"instanceId\"?\n" +
+	"instanceId\"\\\n" +
 	"\x0eVirtioFSConfig\x12\x10\n" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x12\x1b\n" +
-	"\troot_path\x18\x02 \x01(\tR\brootPath\"P\n" +
+	"\troot_path\x18\x02 \x01(\tR\brootPath\x12\x1b\n" +
+	"\tread_only\x18\x03 \x01(\bR\breadOnly\"P\n" +
 	"\x13VirtioConsoleConfig\x12\x1f\n" +
 	"\vsocket_path\x18\x01 \x01(\tR\n" +
 	"socketPath\x12\x18\n" +

@@ -5,10 +5,10 @@ The files in `internal/vmservice` are generated from OpenVMM's `vmservice.proto`
 ## Source
 
 - Repository: `https://github.com/microsoft/openvmm`
-- Revision: `61fd38fe6114d0955a082aa717a8e16e722b8490`
+- Revision: `14d607e4d7117df2f6934707c0de56110e7fb8a9`
 - Path: `openvmm/openvmm_ttrpc_vmservice/src/vmservice.proto`
-- SHA-256: `D3A03C6DBCB633579A7F78535DE8EDD2CA73B6B61546E269D7C1ABD3B8A4DDD0`
-- Generation input SHA-256: `9D8876BEBF102B095593BB4CF512FFD53CBA0F2867C06F0E2FE761B48C776859`
+- SHA-256: `E936C7B258E6B2A65A88B392D459A2C3A6A9FE163BD04B132E7F0FA32CE7EBAD`
+- Generation input SHA-256: `50142DD6F7AEBACD9F9202E953651EDE0A2EBBAF30182AB6AA47A53CA2C2B610`
 
 ## Toolchain
 
@@ -23,9 +23,13 @@ The upstream proto declares `option go_package = "vmservice"`, which current `pr
 Run these commands from a temporary directory, not the repository root:
 
 ```powershell
-$revision = '61fd38fe6114d0955a082aa717a8e16e722b8490'
-$source = "https://raw.githubusercontent.com/microsoft/openvmm/$revision/openvmm/openvmm_ttrpc_vmservice/src/vmservice.proto"
-Invoke-WebRequest -Uri $source -OutFile vmservice.proto
+$openvmm = 'Q:\openvmm-openvmm-lcow-mvp'
+$revision = '14d607e4d7117df2f6934707c0de56110e7fb8a9'
+if ((git -C $openvmm rev-parse HEAD).Trim() -ne $revision) {
+  throw "OpenVMM HEAD does not match $revision"
+}
+$source = Join-Path $openvmm 'openvmm\openvmm_ttrpc_vmservice\src\vmservice.proto'
+Copy-Item $source vmservice.proto
 
 # The pinned upstream proto imports Struct but never references it. Remove that
 # import so the generated client does not add an unused structpb vendor package.
@@ -46,7 +50,7 @@ protoc `
 
 | File | SHA-256 |
 |---|---|
-| `vmservice.pb.go` | `3759ABBD392E9382A80DB618B2CC3E2728CE81928F321A58E64681F5667B89BF` |
+| `vmservice.pb.go` | `4BA501AD19B85CBD7D7ABDB026EAF5CF7145BE94974A40CA0DA5088B76A970E2` |
 | `vmservice_grpc.pb.go` | `979F14C257C4391B6C31867C54335C7CA8A0DCD47DD93BE924331E1910D3FE0F` |
 
 Copy the generated files to `internal/vmservice` only when both hashes match. A source revision or toolchain update must update this document and the expected hashes in the same change.
