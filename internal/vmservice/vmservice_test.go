@@ -1,6 +1,10 @@
+// Copyright (c) Microsoft Corporation.
+// Licensed under the MIT License.
+
 package vmservice
 
 import (
+	"bytes"
 	"testing"
 
 	"google.golang.org/protobuf/proto"
@@ -16,14 +20,30 @@ func TestVirtioFSConfigReadOnlyDescriptorAndRoundTrip(t *testing.T) {
 	if got, want := field.Number(), protoreflect.FieldNumber(3); got != want {
 		t.Fatalf("VirtioFSConfig.read_only field number = %d, want %d", got, want)
 	}
+	if got, want := field.Kind(), protoreflect.BoolKind; got != want {
+		t.Fatalf("VirtioFSConfig.read_only kind = %v, want %v", got, want)
+	}
+	if field.HasPresence() {
+		t.Fatal("VirtioFSConfig.read_only has explicit presence, want implicit presence")
+	}
 	if message.Get(field).Bool() {
 		t.Fatal("VirtioFSConfig.read_only default = true, want false")
 	}
 
-	message.Set(field, protoreflect.ValueOfBool(true))
-	wire, err := proto.Marshal(message.Interface())
+	wire, err := proto.Marshal(&VirtioFSConfig{})
 	if err != nil {
-		t.Fatalf("marshal VirtioFSConfig: %v", err)
+		t.Fatalf("marshal default VirtioFSConfig: %v", err)
+	}
+	if len(wire) != 0 {
+		t.Fatalf("default VirtioFSConfig wire bytes = %x, want no fields", wire)
+	}
+
+	wire, err = proto.Marshal(&VirtioFSConfig{ReadOnly: true})
+	if err != nil {
+		t.Fatalf("marshal read-only VirtioFSConfig: %v", err)
+	}
+	if want := []byte{0x18, 0x01}; !bytes.Equal(wire, want) {
+		t.Fatalf("read-only VirtioFSConfig wire bytes = %x, want %x", wire, want)
 	}
 
 	var decoded VirtioFSConfig
@@ -34,7 +54,7 @@ func TestVirtioFSConfigReadOnlyDescriptorAndRoundTrip(t *testing.T) {
 	if decodedField == nil || decodedField.Name() != "read_only" {
 		t.Fatalf("VirtioFSConfig field 3 descriptor = %v, want read_only", decodedField)
 	}
-	if !decoded.ProtoReflect().Get(decodedField).Bool() {
+	if !decoded.GetReadOnly() || !decoded.ProtoReflect().Get(decodedField).Bool() {
 		t.Fatal("VirtioFSConfig.read_only = false after round trip, want true")
 	}
 }
