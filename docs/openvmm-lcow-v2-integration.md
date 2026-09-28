@@ -1,5 +1,7 @@
 # OpenVMM-backed LCOW V2
 
+Last verified: 2026-09-14
+
 This prototype runs the existing LCOW V2 shim and GCS control plane on OpenVMM/WHP instead of
 HCS/vmwp. GCS-facing sandbox, container, process, OCI, and I/O contracts remain unchanged;
 hcsshim adds the host-side VM, SCSI, networking, transport, and cleanup adapter.
@@ -54,8 +56,9 @@ Generated vmservice bindings are checked in under `internal/vmservice`. See
 
 Repository: <https://github.com/microsoft/openvmm>
 
-Compatible OpenVMM implementation: [`3d740549ef67c4bb96212f8a2f209df272832777`](https://github.com/shreyanshjain7174/openvmm/commit/3d740549ef67c4bb96212f8a2f209df272832777).
-It is based on upstream commit `61fd38fe6114d0955a082aa717a8e16e722b8490`.
+Compatible OpenVMM source HEAD: `14d607e4d7117df2f6934707c0de56110e7fb8a9`.
+This revision is local and unpublished; do not treat it as a publicly retrievable commit or a
+production pin.
 
 The compatible `openvmm.exe` must include LCOW parity in its vmservice-created VM path:
 
@@ -65,6 +68,8 @@ The compatible `openvmm.exe` must include LCOW parity in its vmservice-created V
 - Dynamic VMBus device identity and removal for DIO NIC cleanup, using existing
   `NICConfig.nic_id`.
 - Shutdown/KVP lifetime and teardown ordering when those integration components are enabled.
+- Create-time VirtioFS `read_only` handling that maps `true` to the canonical host mount option
+  `ro`, while preserving the writable default for `false`.
 
 LCOW SCSI controller identities are fixed:
 
@@ -124,9 +129,35 @@ AF_UNIX paths are limited to 107 UTF-8 bytes; `hybridVsockBase` must leave room 
 - Boot files from `BootFilesRootPath` or the normal default boot-files location.
 - Kernel named `vmlinux` (preferred) or `kernel`, plus VHD1 root named `rootfs.vhd`.
 
-The adapter does not populate `VirtioFSConfig`. VirtioFS through this runtime is unimplemented, and
-dynamic host-directory mounts remain unsupported because LCOW uses runtime Plan9 modification rather
-than OpenVMM's create-time VirtioFS contract.
+The prototype supports and has live proof for create-time vmservice VirtioFS. The additive proto3
+field `VirtioFSConfig.read_only = 3` keeps the existing writable behavior when absent or `false`.
+When `true`, OpenVMM maps it to the canonical host mount option `ro`, so the backend enforces
+read-only access. Both guest mounts used flags `0`; neither relied on guest `MS_RDONLY`.
+
+The 2026-09-14 live proof used local OpenVMM source HEAD
+`14d607e4d7117df2f6934707c0de56110e7fb8a9` and kernel
+`6.6.84-3.azl3-openvmm-virtiofs` with `CONFIG_PCI_HYPERV=y` and
+`CONFIG_PCI_HYPERV_INTERFACE=y`:
+
+- Read-only: exact sentinel read passed; create and opening the existing sentinel with
+  `O_WRONLY` both returned `EROFS`; no write file appeared; unmount passed.
+- Writable: create, overwrite, `fsync`, close, readback, and unmount passed. The resulting host
+  bytes had SHA-256
+  `2429C93308D4CD9EE737ADB33F8F68436747FA1D347DCE771204C6FCC8A3A9B6`.
+
+This proto evolution has a deliberate compatibility hazard: an older server ignores unknown field
+3 and therefore fails open to writable. Pin compatible source, generated bindings, and server
+binaries whenever requesting read-only behavior.
+
+CRI dynamic host-directory mounts are a separate path and remain unsupported. They still use
+runtime Plan9/`LCOWMappedDirectory` modification, not create-time VirtioFS. The OpenVMM adapter
+returns gRPC `codes.Unimplemented` for Plan9 add and remove without issuing vmservice or HCN calls.
+Dynamic aggregate child mapping remains future work.
+
+The rejected container-start path can leave the configured hybrid-vsock reparse point after the
+OpenVMM and tagged-shim processes exit. Test cleanup must first prove that no CRI objects or relevant
+processes remain, then remove that unowned path. Never delete a configured socket while an owning
+process may still be active.
 
 ## Prototype scope
 
@@ -137,13 +168,14 @@ Supported and validated:
 - multiple containers, logs, process I/O, synchronous exec, and nonzero exit propagation;
 - interactive terminal I/O and dimensions;
 - SCSI disk add/remove and DIO networking;
+- create-time vmservice VirtioFS with backend-enforced read-only and writable behavior;
 - targeted, retryable cleanup of processes, network resources, and socket paths.
 
 Unsupported or unverified:
 
 - ARM64, confidential VMs, WCOW on OpenVMM, VPMEM, and vPCI assignment;
 - save, restore, and live migration;
-- dynamic host-directory mounts and VirtioFS through CRI;
+- dynamic host-directory mounts through CRI and aggregate VirtioFS child mapping;
 - broad statistics and resource-control enforcement;
 - NUMA, CPU groups, resource partitions, storage QoS, and custom hvsock tables;
 - concurrent sandboxes with one host-wide socket configuration and restart recovery;

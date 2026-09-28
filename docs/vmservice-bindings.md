@@ -1,15 +1,32 @@
 # OpenVMM vmservice Go bindings
 
+Last verified: 2026-09-14
+
 The files in `internal/vmservice` are generated from OpenVMM's `vmservice.proto`. The proto is not copied into this repository.
 
 ## Source
 
 - Repository: `https://github.com/microsoft/openvmm`
 - Revision: `14d607e4d7117df2f6934707c0de56110e7fb8a9`
-- Status: unpublished commit on branch `user/shsancheti/openvmm-lcow-mvp`
+- Status: local and unpublished commit on branch `user/shsancheti/openvmm-lcow-mvp`
 - Path: `openvmm/openvmm_ttrpc_vmservice/src/vmservice.proto`
 - SHA-256: `E936C7B258E6B2A65A88B392D459A2C3A6A9FE163BD04B132E7F0FA32CE7EBAD`
 - Generation input SHA-256: `50142DD6F7AEBACD9F9202E953651EDE0A2EBBAF30182AB6AA47A53CA2C2B610`
+
+## VirtioFS compatibility
+
+`VirtioFSConfig` includes the additive proto3 field `bool read_only = 3`. Its absent or
+`false` default remains writable. A value of `true` maps in the compatible OpenVMM server
+to the canonical host mount option `ro`, which enforces read-only behavior in the backend.
+Guest mount flags remain `0`; callers must not depend on guest `MS_RDONLY` for this contract.
+
+Proto3 unknown-field behavior makes version skew security-relevant here. A server built from
+an older schema ignores field 3 and handles the share as writable. Pin compatible OpenVMM
+source, generated bindings, and server binaries whenever `read_only=true` is required.
+
+The generated-field contract is covered by
+`internal/vmservice.TestVirtioFSConfigReadOnlyDescriptorAndRoundTrip`. OpenVMM separately
+tests the `true` to `ro` mapping and direct read-only and writable backend behavior.
 
 Before merging the hcsshim change, the revision must be re-pinned to the merged OpenVMM
 upstream commit and the bindings regenerated from that commit.
@@ -99,6 +116,9 @@ foreach ($output in $outputs.GetEnumerator()) {
   if ((Get-FileHash $generated -Algorithm SHA256).Hash -ne $output.Value) {
     throw "$($output.Key) does not match expected hash $($output.Value)"
   }
+}
+foreach ($output in $outputs.GetEnumerator()) {
+  $generated = Join-Path $work $output.Key
   Copy-Item $generated (Join-Path $repository "internal\vmservice\$($output.Key)")
 }
 ```
