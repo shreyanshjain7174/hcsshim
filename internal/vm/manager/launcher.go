@@ -298,6 +298,14 @@ func (l *openvmmLauncher) Launch(ctx context.Context, id string) (string, error)
 		l.release()
 		return "", errors.Join(err, claimErr)
 	}
+	// OpenVMM binds the hybrid-vsock base itself and never unlinks it.
+	if base := l.config.HybridVsockBase; base != "" {
+		if err := l.claimSocketPath(ctx, base); err != nil {
+			claimErr := l.abandonClaim(ctx, claim)
+			l.release()
+			return "", errors.Join(err, claimErr)
+		}
+	}
 
 	child, err := startProcess(l.config.OpenVMMBinaryPath, launchArgs(socketPath))
 	if err != nil {
@@ -452,12 +460,37 @@ func socketDefinitelyUnused(err error) bool {
 		errors.Is(err, windows.WSAECONNREFUSED)
 }
 
+var errHybridBaseNotASocket = errors.New("the configured hybrid-vsock base names an ordinary file, not a socket")
+
+// removeDeadSocket unlinks a socket pathname whose owner is known to be gone.
+func removeDeadSocket(path string) error {
+	owner, err := safefile.OpenDeleteHandle(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("cannot inspect %s: %w", path, err)
+	}
+	mode, err := owner.Mode()
+	if err != nil {
+		return errors.Join(fmt.Errorf("cannot inspect %s: %w", path, err), owner.Close())
+	}
+	if mode&os.ModeSocket == 0 {
+		return errors.Join(fmt.Errorf("refusing to unlink %s: %w", path, errHybridBaseNotASocket), owner.Close())
+	}
+	if err := owner.Remove(); err != nil {
+		return errors.Join(fmt.Errorf("cannot remove %s: %w", path, err), owner.Close())
+	}
+	return nil
+}
+
 // Terminate runs the child-only rungs of the composed ladder:
 //
 //	3 bounded wait on the owned handle
 //	4 kill through the owned handle, then prove the child is gone
 //	5 close the owned handles
 //	6 remove the socket this launcher owns, through its ownership handle
+//	6b remove the hybrid-vsock base the exited child bound
 //	7 release the host claim on the configured pathname
 //
 // The first error is returned and later errors are logged. VM service teardown and quit belong to
@@ -554,10 +587,19 @@ func (l *openvmmLauncher) Terminate(ctx context.Context) error {
 		}
 	}
 
+	// Rung 6b. The child is gone, so nothing can still be listening on its base.
+	hybridRemoved := true
+	if exited && l.config != nil && l.config.HybridVsockBase != "" {
+		if err := removeDeadSocket(l.config.HybridVsockBase); err != nil {
+			hybridRemoved = false
+			record(fmt.Errorf("termination rung 6b, removing the hybrid-vsock base: %w", err))
+		}
+	}
+
 	// Rung 7. The host claim is the last thing released, and only once the child is gone,
 	// its handles are closed, and the socket is confirmed removed. Releasing it earlier
 	// would let another shim take the pathname while this one still has work to do on it.
-	if exited && closeErr == nil && socketRemoved {
+	if exited && closeErr == nil && socketRemoved && hybridRemoved {
 		claimReleased := true
 		if claim != nil {
 			if err := claim.Release(); err != nil {
