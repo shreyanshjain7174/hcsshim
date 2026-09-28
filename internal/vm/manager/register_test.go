@@ -78,7 +78,9 @@ func TestNewDirectCreateDialFailureClosesConnectionAndTerminatesHost(t *testing.
 func TestNewDirectCreateSerialListenerFailureCleansUp(t *testing.T) {
 	config := nativeBuilderConfig()
 	config.SerialSocket = shortSerialSocketPath(t)
-	listener, err := net.Listen("unix", config.SerialSocket)
+	opts := nativeCreateOptions(t)
+	opts.SandboxSpec.Annotations[iannotations.UVMConsolePipe] = `\\.\pipe\console`
+	listener, err := net.Listen("unix", config.ForVM(opts.ID).SerialSocket)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
@@ -93,8 +95,6 @@ func TestNewDirectCreateSerialListenerFailureCleansUp(t *testing.T) {
 		},
 		TransportBase: config.HybridVsockBase,
 	})
-	opts := nativeCreateOptions(t)
-	opts.SandboxSpec.Annotations[iannotations.UVMConsolePipe] = `\\.\pipe\console`
 
 	result, err := create(context.Background(), opts)
 	if err == nil || result != nil {

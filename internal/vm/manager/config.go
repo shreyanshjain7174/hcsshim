@@ -4,6 +4,8 @@ package manager
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +23,8 @@ const (
 	hybridVsockBaseLimit       = afUnixPathLimit - len(hybridVsockWidestSuffix)
 	hybridVsockGUIDSuffixBytes = 1 + 36
 	hybridVsockBaseWarn        = afUnixPathLimit - hybridVsockGUIDSuffixBytes
+	// perVMSuffixBytes is the "-" plus 8 hex digits ForVM adds to every socket path.
+	perVMSuffixBytes = 9
 )
 
 var errConfigSource = errors.New("the openvmm backend configuration source is unusable")
@@ -109,15 +113,31 @@ func (c *Config) Validate() (warnings []string, err error) {
 		{"vmServiceSocket", c.VMServiceSocket},
 		{"serialSocket", c.SerialSocket},
 	} {
-		if n := len(field.value); n > afUnixPathLimit {
-			return warnings, fmt.Errorf("%s in %s is %d UTF-8 bytes, over the AF_UNIX limit of %d: %w", field.name, configFileName, n, afUnixPathLimit, errConfigSource)
+		if n := len(field.value) + perVMSuffixBytes; n > afUnixPathLimit {
+			return warnings, fmt.Errorf("%s in %s is %d UTF-8 bytes with its %d-byte per-VM suffix, over the AF_UNIX limit of %d: %w", field.name, configFileName, n, perVMSuffixBytes, afUnixPathLimit, errConfigSource)
 		}
 	}
-	if n := len(c.HybridVsockBase); n > hybridVsockBaseLimit {
-		return warnings, fmt.Errorf("hybridVsockBase in %s is %d UTF-8 bytes, over the limit of %d, which is the AF_UNIX limit of %d less the %d bytes of the widest %q suffix: %w", configFileName, n, hybridVsockBaseLimit, afUnixPathLimit, len(hybridVsockWidestSuffix), hybridVsockWidestSuffix, errConfigSource)
+	if n := len(c.HybridVsockBase) + perVMSuffixBytes; n > hybridVsockBaseLimit {
+		return warnings, fmt.Errorf("hybridVsockBase in %s is %d UTF-8 bytes with its %d-byte per-VM suffix, over the limit of %d, which is the AF_UNIX limit of %d less the %d bytes of the widest %q suffix: %w", configFileName, n, perVMSuffixBytes, hybridVsockBaseLimit, afUnixPathLimit, len(hybridVsockWidestSuffix), hybridVsockWidestSuffix, errConfigSource)
 	}
-	if n := len(c.HybridVsockBase); n > hybridVsockBaseWarn {
-		warnings = append(warnings, fmt.Sprintf("hybridVsockBase is %d UTF-8 bytes; above %d bytes OpenVMM's %d-character GUID fallback suffix no longer fits inside the AF_UNIX limit of %d", n, hybridVsockBaseWarn, hybridVsockGUIDSuffixBytes-1, afUnixPathLimit))
+	if n := len(c.HybridVsockBase) + perVMSuffixBytes; n > hybridVsockBaseWarn {
+		warnings = append(warnings, fmt.Sprintf("hybridVsockBase is %d UTF-8 bytes with its per-VM suffix; above %d bytes OpenVMM's %d-character GUID fallback suffix no longer fits inside the AF_UNIX limit of %d", n, hybridVsockBaseWarn, hybridVsockGUIDSuffixBytes-1, afUnixPathLimit))
 	}
 	return warnings, nil
+}
+
+// ForVM returns a copy whose socket paths are unique to id, so shims on one host never
+// share a pathname.
+func (c *Config) ForVM(id string) *Config {
+	sum := sha256.Sum256([]byte(id))
+	tag := "-" + hex.EncodeToString(sum[:4])
+	suffixed := func(p string) string {
+		ext := filepath.Ext(p)
+		return strings.TrimSuffix(p, ext) + tag + ext
+	}
+	out := *c
+	out.VMServiceSocket = suffixed(c.VMServiceSocket)
+	out.HybridVsockBase = suffixed(c.HybridVsockBase)
+	out.SerialSocket = suffixed(c.SerialSocket)
+	return &out
 }

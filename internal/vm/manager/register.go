@@ -24,29 +24,33 @@ func NewDirectCreate() (controllervm.DirectCreateFunc, error) {
 		return nil, fmt.Errorf("the openvmm backend configuration is unusable: %w", err)
 	}
 	return newDirectCreate(config, Deps{
-		Launcher:      newLauncher(config),
-		Dial:          dialVMService,
-		TransportBase: config.HybridVsockBase,
+		NewLauncher: func(c *Config) VMLauncher { return newLauncher(c) },
+		Dial:        dialVMService,
 	}), nil
 }
 
 func newDirectCreate(config *Config, deps Deps) controllervm.DirectCreateFunc {
-	requestBackend := &backend{deps: deps}
 	return func(ctx context.Context, opts *controllervm.CreateOptions) (*controllervm.DirectCreateResult, error) {
 		if opts == nil {
 			return nil, fmt.Errorf("no create options provided")
+		}
+		vmConfig := config.ForVM(opts.ID)
+		vmDeps := deps
+		vmDeps.TransportBase = vmConfig.HybridVsockBase
+		if vmDeps.Launcher == nil && vmDeps.NewLauncher != nil {
+			vmDeps.Launcher = vmDeps.NewLauncher(vmConfig)
 		}
 		request, sandboxOptions, reservations, err := BuildCreateVMRequestFromOptions(
 			ctx,
 			opts.ShimOpts,
 			opts.SandboxSpec,
-			config,
+			vmConfig,
 			opts.ID,
 		)
 		if err != nil {
 			return nil, err
 		}
-		computeSystem, runtimeID, err := requestBackend.CreateFromRequest(ctx, opts.ID, request)
+		computeSystem, runtimeID, err := (&backend{deps: vmDeps}).CreateFromRequest(ctx, opts.ID, request)
 		if err != nil {
 			return nil, err
 		}

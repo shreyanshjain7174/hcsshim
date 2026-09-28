@@ -58,6 +58,8 @@ type DialFunc func(ctx context.Context, socketPath string) (vmservice.VMClient, 
 type Deps struct {
 	// Launcher spawns the VM host process and reports the socket to dial.
 	Launcher VMLauncher
+	// NewLauncher builds the launcher for one VM's derived config when Launcher is nil.
+	NewLauncher func(*Config) VMLauncher
 	// Dial builds the vmservice client from that socket path.
 	Dial DialFunc
 	// TransportBase is the hybrid-vsock base, handed through verbatim.
