@@ -16,10 +16,16 @@ import (
 	hcsschema "github.com/Microsoft/hcsshim/internal/hcs/schema2"
 	hcs "github.com/Microsoft/hcsshim/internal/hcs/v2"
 	"github.com/Microsoft/hcsshim/internal/protocol/guestrequest"
+	"github.com/Microsoft/hcsshim/internal/protocol/guestresource"
+	"github.com/Microsoft/hcsshim/internal/vm/vmutils"
 	"github.com/Microsoft/hcsshim/internal/vmservice"
 
 	"github.com/Microsoft/go-winio/pkg/guid"
+	"github.com/containerd/errdefs"
+	"github.com/containerd/errdefs/pkg/errgrpc"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -27,6 +33,7 @@ import (
 // success everywhere else, so network Modify tests never need the full lifecycle fake.
 type fakeModifyVMClient struct {
 	mu            sync.Mutex
+	totalCalls    int
 	createCalls   []*vmservice.CreateVMRequest
 	createErr     error
 	modifyCalls   []*vmservice.ModifyResourceRequest
@@ -44,6 +51,7 @@ type fakeModifyVMClient struct {
 
 func (f *fakeModifyVMClient) ModifyResource(ctx context.Context, in *vmservice.ModifyResourceRequest, _ ...grpc.CallOption) (*emptypb.Empty, error) {
 	f.mu.Lock()
+	f.totalCalls++
 	f.modifyCalls = append(f.modifyCalls, in)
 	entered := f.modifyEntered
 	release := f.modifyRelease
@@ -82,11 +90,13 @@ func (f *fakeModifyVMClient) calls() []*vmservice.ModifyResourceRequest {
 func (f *fakeModifyVMClient) CreateVM(_ context.Context, in *vmservice.CreateVMRequest, _ ...grpc.CallOption) (*emptypb.Empty, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.totalCalls++
 	f.createCalls = append(f.createCalls, in)
 	return &emptypb.Empty{}, f.createErr
 }
 func (f *fakeModifyVMClient) TeardownVM(ctx context.Context, _ *emptypb.Empty, _ ...grpc.CallOption) (*emptypb.Empty, error) {
 	f.mu.Lock()
+	f.totalCalls++
 	f.teardownCalls++
 	f.mu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -95,11 +105,15 @@ func (f *fakeModifyVMClient) TeardownVM(ctx context.Context, _ *emptypb.Empty, _
 	return &emptypb.Empty{}, nil
 }
 func (f *fakeModifyVMClient) PauseVM(context.Context, *emptypb.Empty, ...grpc.CallOption) (*emptypb.Empty, error) {
+	f.mu.Lock()
+	f.totalCalls++
+	f.mu.Unlock()
 	return &emptypb.Empty{}, nil
 }
 
 func (f *fakeModifyVMClient) ResumeVM(ctx context.Context, _ *emptypb.Empty, _ ...grpc.CallOption) (*emptypb.Empty, error) {
 	f.mu.Lock()
+	f.totalCalls++
 	entered, block := f.resumeEntered, f.resumeBlock
 	f.mu.Unlock()
 	if entered != nil {
@@ -116,6 +130,7 @@ func (f *fakeModifyVMClient) ResumeVM(ctx context.Context, _ *emptypb.Empty, _ .
 }
 func (f *fakeModifyVMClient) WaitVM(ctx context.Context, _ *emptypb.Empty, _ ...grpc.CallOption) (*emptypb.Empty, error) {
 	f.mu.Lock()
+	f.totalCalls++
 	block, err := f.waitBlock, f.waitErr
 	f.mu.Unlock()
 	if block != nil {
@@ -131,19 +146,32 @@ func (f *fakeModifyVMClient) WaitVM(ctx context.Context, _ *emptypb.Empty, _ ...
 	return &emptypb.Empty{}, nil
 }
 func (f *fakeModifyVMClient) CapabilitiesVM(context.Context, *emptypb.Empty, ...grpc.CallOption) (*vmservice.CapabilitiesVMResponse, error) {
+	f.mu.Lock()
+	f.totalCalls++
+	f.mu.Unlock()
 	return &vmservice.CapabilitiesVMResponse{}, nil
 }
 func (f *fakeModifyVMClient) PropertiesVM(context.Context, *vmservice.PropertiesVMRequest, ...grpc.CallOption) (*vmservice.PropertiesVMResponse, error) {
+	f.mu.Lock()
+	f.totalCalls++
+	f.mu.Unlock()
 	return &vmservice.PropertiesVMResponse{}, nil
 }
 func (f *fakeModifyVMClient) AddPcieDevice(context.Context, *vmservice.AddPcieDeviceRequest, ...grpc.CallOption) (*emptypb.Empty, error) {
+	f.mu.Lock()
+	f.totalCalls++
+	f.mu.Unlock()
 	return &emptypb.Empty{}, nil
 }
 func (f *fakeModifyVMClient) RemovePcieDevice(context.Context, *vmservice.RemovePcieDeviceRequest, ...grpc.CallOption) (*emptypb.Empty, error) {
+	f.mu.Lock()
+	f.totalCalls++
+	f.mu.Unlock()
 	return &emptypb.Empty{}, nil
 }
 func (f *fakeModifyVMClient) Quit(ctx context.Context, _ *emptypb.Empty, _ ...grpc.CallOption) (*emptypb.Empty, error) {
 	f.mu.Lock()
+	f.totalCalls++
 	f.quitCalls++
 	block := f.quitBlock
 	f.mu.Unlock()
@@ -172,7 +200,55 @@ func (f *fakeModifyVMClient) teardownCallCount() int {
 	return f.teardownCalls
 }
 
+func (f *fakeModifyVMClient) totalCallCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.totalCalls
+}
+
 var _ vmservice.VMClient = (*fakeModifyVMClient)(nil)
+
+func TestFakeModifyVMClientCountsEveryRPC(t *testing.T) {
+	client := &fakeModifyVMClient{}
+	ctx := context.Background()
+	calls := []struct {
+		name string
+		call func() error
+	}{
+		{name: "CreateVM", call: func() error { _, err := client.CreateVM(ctx, &vmservice.CreateVMRequest{}); return err }},
+		{name: "TeardownVM", call: func() error { _, err := client.TeardownVM(ctx, &emptypb.Empty{}); return err }},
+		{name: "PauseVM", call: func() error { _, err := client.PauseVM(ctx, &emptypb.Empty{}); return err }},
+		{name: "ResumeVM", call: func() error { _, err := client.ResumeVM(ctx, &emptypb.Empty{}); return err }},
+		{name: "WaitVM", call: func() error { _, err := client.WaitVM(ctx, &emptypb.Empty{}); return err }},
+		{name: "CapabilitiesVM", call: func() error { _, err := client.CapabilitiesVM(ctx, &emptypb.Empty{}); return err }},
+		{name: "PropertiesVM", call: func() error { _, err := client.PropertiesVM(ctx, &vmservice.PropertiesVMRequest{}); return err }},
+		{name: "ModifyResource", call: func() error { _, err := client.ModifyResource(ctx, &vmservice.ModifyResourceRequest{}); return err }},
+		{name: "AddPcieDevice", call: func() error { _, err := client.AddPcieDevice(ctx, &vmservice.AddPcieDeviceRequest{}); return err }},
+		{name: "RemovePcieDevice", call: func() error { _, err := client.RemovePcieDevice(ctx, &vmservice.RemovePcieDeviceRequest{}); return err }},
+		{name: "Quit", call: func() error { _, err := client.Quit(ctx, &emptypb.Empty{}); return err }},
+	}
+
+	for _, call := range calls {
+		if err := call.call(); err != nil {
+			t.Fatalf("%s: %v", call.name, err)
+		}
+	}
+	if got := client.totalCallCount(); got != len(calls) {
+		t.Fatalf("total VM RPC count = %d, want %d", got, len(calls))
+	}
+	if got := len(client.createCalls); got != 1 {
+		t.Fatalf("CreateVM count = %d, want 1", got)
+	}
+	if got := len(client.calls()); got != 1 {
+		t.Fatalf("ModifyResource count = %d, want 1", got)
+	}
+	if got := client.teardownCallCount(); got != 1 {
+		t.Fatalf("TeardownVM count = %d, want 1", got)
+	}
+	if got := client.quitCallCount(); got != 1 {
+		t.Fatalf("Quit count = %d, want 1", got)
+	}
+}
 
 // fakeEndpointPortBinder is the test double for EndpointPortBinder. bindResults and
 // unbindErrs are queues: each call pops the front entry, and the last entry repeats once
@@ -336,6 +412,79 @@ func TestSystemModifySCSIUnchangedAndTouchesNoHCN(t *testing.T) {
 	}
 	if binder.bindCallCount() != 0 || binder.unbindCallCount() != 0 {
 		t.Fatalf("SCSI modify touched HCN: bind=%d unbind=%d", binder.bindCallCount(), binder.unbindCallCount())
+	}
+}
+
+func TestSystemModifyPlan9ReturnsUnimplementedWithoutRPC(t *testing.T) {
+	tests := []struct {
+		name        string
+		requestType guestrequest.RequestType
+		settings    hcsschema.Plan9Share
+		guest       guestresource.LCOWMappedDirectory
+	}{
+		{
+			name:        "Add",
+			requestType: guestrequest.RequestTypeAdd,
+			settings: hcsschema.Plan9Share{
+				Name:       "0",
+				AccessName: "0",
+				Path:       `C:\host-directory`,
+				Port:       vmutils.Plan9Port,
+				Flags:      hcsschema.Plan9ShareFlagsLinuxMetadata | hcsschema.Plan9ShareFlagsReadOnly,
+			},
+			guest: guestresource.LCOWMappedDirectory{
+				MountPath: "/run/mounts/plan9/0",
+				ShareName: "0",
+				Port:      vmutils.Plan9Port,
+				ReadOnly:  true,
+			},
+		},
+		{
+			name:        "Remove",
+			requestType: guestrequest.RequestTypeRemove,
+			settings: hcsschema.Plan9Share{
+				Name:       "0",
+				AccessName: "0",
+				Port:       vmutils.Plan9Port,
+			},
+			guest: guestresource.LCOWMappedDirectory{
+				MountPath: "/run/mounts/plan9/0",
+				ShareName: "0",
+				Port:      vmutils.Plan9Port,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeModifyVMClient{}
+			binder := &fakeEndpointPortBinder{}
+			sys := newTestSystem(client, binder)
+			req := &hcsschema.ModifySettingRequest{
+				RequestType:  test.requestType,
+				ResourcePath: resourcepaths.Plan9ShareResourcePath,
+				Settings:     test.settings,
+				GuestRequest: guestrequest.ModificationRequest{
+					ResourceType: guestresource.ResourceTypeMappedDirectory,
+					RequestType:  test.requestType,
+					Settings:     test.guest,
+				},
+			}
+
+			err := sys.Modify(context.Background(), req)
+			if !errors.Is(err, ErrModifyNotSupported) || !errors.Is(err, errdefs.ErrNotImplemented) {
+				t.Fatalf("Modify(Plan9 %s) = %v, want ErrModifyNotSupported wrapping ErrNotImplemented", test.name, err)
+			}
+			if got := status.Code(errgrpc.ToGRPC(err)); got != codes.Unimplemented {
+				t.Fatalf("Modify(Plan9 %s) gRPC code = %s, want %s", test.name, got, codes.Unimplemented)
+			}
+			if got := client.totalCallCount(); got != 0 {
+				t.Fatalf("Modify(Plan9 %s) issued %d vmservice RPCs, want 0", test.name, got)
+			}
+			if binder.bindCallCount() != 0 || binder.unbindCallCount() != 0 {
+				t.Fatalf("Plan9 %s touched HCN: bind=%d unbind=%d", test.name, binder.bindCallCount(), binder.unbindCallCount())
+			}
+		})
 	}
 }
 
