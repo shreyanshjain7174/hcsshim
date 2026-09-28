@@ -244,7 +244,9 @@ func (s *Service) pingSandboxInternal(_ context.Context, _ *sandbox.PingRequest)
 //
 // The sandbox must already be in the stopped state before shutdown is accepted.
 func (s *Service) shutdownSandboxInternal(ctx context.Context, request *sandbox.ShutdownSandboxRequest) (*sandbox.ShutdownSandboxResponse, error) {
-	if s.sandboxID != request.SandboxID {
+	// An empty sandboxID means CreateSandbox failed; containerd still sends
+	// ShutdownSandbox to reap the shim, so accept it.
+	if s.sandboxID != "" && s.sandboxID != request.SandboxID {
 		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", s.sandboxID, request.SandboxID)
 	}
 
