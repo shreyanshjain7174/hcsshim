@@ -61,3 +61,28 @@ func TestValidateReservesPerVMSuffix(t *testing.T) {
 		t.Fatalf("over-budget hybrid base template accepted: %v", err)
 	}
 }
+
+func TestValidateAcceptsTemplatesExactlyAtTheBudget(t *testing.T) {
+	dir := t.TempDir()
+	binary := filepath.Join(dir, "openvmm.exe")
+	if err := os.WriteFile(binary, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &Config{
+		OpenVMMBinaryPath: binary,
+		VMServiceSocket:   `C:\` + strings.Repeat("a", afUnixPathLimit-len(`C:\`)-perVMSuffixBytes),
+		HybridVsockBase:   `C:\` + strings.Repeat("h", hybridVsockBaseLimit-len(`C:\`)-perVMSuffixBytes),
+		SerialSocket:      `C:\com1.sock`,
+	}
+	if _, err := c.Validate(); err != nil {
+		t.Fatalf("templates exactly at the budget rejected: %v", err)
+	}
+	// Accepting the template is only correct if the derived path really fits.
+	derived := c.ForVM("pod@vm")
+	if len(derived.VMServiceSocket) > afUnixPathLimit {
+		t.Fatalf("derived socket is %d bytes, over the %d limit", len(derived.VMServiceSocket), afUnixPathLimit)
+	}
+	if len(derived.HybridVsockBase) > hybridVsockBaseLimit {
+		t.Fatalf("derived hybrid base is %d bytes, over the %d limit", len(derived.HybridVsockBase), hybridVsockBaseLimit)
+	}
+}

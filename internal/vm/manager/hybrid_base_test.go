@@ -12,7 +12,7 @@ import (
 
 func staleSocket(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "hv")
+	path := shortHybridBasePath(t)
 	l, err := net.Listen("unix", path)
 	if err != nil {
 		t.Fatal(err)

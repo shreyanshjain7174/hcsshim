@@ -42,6 +42,23 @@ type hostSocketClaim struct {
 	close  func(windows.Handle) error
 }
 
+// strandedClaims remembers claims whose Release failed, by claim path. A failed release
+// leaves this process holding the exclusive handle, and the launcher that owned it is
+// discarded after each failed create, so without this a same-ID retry in the same shim would
+// be refused as if another process held the socket.
+var strandedClaims sync.Map
+
+// reclaimStrandedClaim retries the release of a claim this process failed to release for
+// socketPath. It is the shim's own retry: the low-level acquire keeps its contract of refusing
+// while anyone holds the claim, and only the launcher that owns the VM calls this. If the
+// retry fails as well the handle is still held and the acquire that follows reports it, so
+// nothing is taken from another holder.
+func reclaimStrandedClaim(socketPath string) {
+	if stranded, ok := strandedClaims.Load(socketClaimPath(socketPath)); ok {
+		_ = stranded.(*hostSocketClaim).Release()
+	}
+}
+
 func acquireHostSocketClaim(socketPath string) (*hostSocketClaim, error) {
 	claimPath := socketClaimPath(socketPath)
 	name, err := windows.UTF16PtrFromString(claimPath)
@@ -86,8 +103,10 @@ func (c *hostSocketClaim) Release() error {
 		return nil
 	}
 	if err := c.close(c.handle); err != nil {
+		strandedClaims.Store(c.path, c)
 		return fmt.Errorf("cannot release the VM service socket claim %s: %w", c.path, err)
 	}
 	c.held = false
+	strandedClaims.CompareAndDelete(c.path, c)
 	return nil
 }

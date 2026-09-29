@@ -62,7 +62,9 @@ type Deps struct {
 	NewLauncher func(*Config) VMLauncher
 	// Dial builds the vmservice client from that socket path.
 	Dial DialFunc
-	// TransportBase is the hybrid-vsock base, handed through verbatim.
+	// TransportBase is the hybrid-vsock base the request's hvsocket path must equal. The
+	// direct create path overwrites it with the per-VM base derived from the VM ID, so a
+	// value set on the Deps passed to newDirectCreate is not used there.
 	TransportBase string
 }
 

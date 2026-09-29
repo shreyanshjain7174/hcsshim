@@ -246,12 +246,15 @@ type openvmmLauncher struct {
 	readyDial readinessDial
 	poll      time.Duration
 
-	mu         sync.Mutex
-	child      ownedChild
-	childID    string
-	socketPath string
-	launching  bool
-	terminal   bool
+	mu sync.Mutex
+	// terminateMu serializes whole Terminate ladders. Overlapping ladders would race to delete
+	// the same sockets and report each other's sharing violations. It is never held with mu.
+	terminateMu sync.Mutex
+	child       ownedChild
+	childID     string
+	socketPath  string
+	launching   bool
+	terminal    bool
 	// claim is this shim process's exclusive host-level right to the configured pathname.
 	// It is taken before the pathname is probed and released only once cleanup is verified.
 	claim *hostSocketClaim
@@ -287,6 +290,7 @@ func (l *openvmmLauncher) Launch(ctx context.Context, id string) (string, error)
 	// The host claim comes before the probe, the unlink, and the spawn, and it is held
 	// through cleanup. Probing first would let a second shim decide the pathname is stale
 	// in the window between this shim's probe and its bind.
+	reclaimStrandedClaim(socketPath)
 	claim, err := acquireSocketClaim(socketPath)
 	if err != nil {
 		l.release()
@@ -407,7 +411,8 @@ func (l *openvmmLauncher) abandonClaim(ctx context.Context, claim *hostSocketCla
 	return nil
 }
 
-// claimSocketPath decides whether the configured pathname may be taken. A live peer means
+// claimSocketPath decides whether a configured pathname, the VM service socket or the
+// hybrid-vsock base, may be taken. A live peer means
 // no. An answer that does not prove the pathname stale means no. An ordinary file means no,
 // and it is preserved. Only a definitively dead socket is removed, and the removal happens
 // through a handle to that exact object rather than by pathname.
@@ -417,12 +422,12 @@ func (l *openvmmLauncher) claimSocketPath(ctx context.Context, socketPath string
 		if errors.Is(err, os.ErrNotExist) {
 			return nil
 		}
-		return fmt.Errorf("cannot inspect the VM service socket %s: %w", socketPath, err)
+		return fmt.Errorf("cannot inspect the socket pathname %s: %w", socketPath, err)
 	}
 	mode, err := owner.Mode()
 	if err != nil {
 		_ = owner.Close()
-		return fmt.Errorf("cannot inspect the VM service socket %s: %w", socketPath, err)
+		return fmt.Errorf("cannot inspect the socket pathname %s: %w", socketPath, err)
 	}
 	if mode&os.ModeSocket == 0 {
 		_ = owner.Close()
@@ -462,7 +467,9 @@ func socketDefinitelyUnused(err error) bool {
 
 var errHybridBaseNotASocket = errors.New("the configured hybrid-vsock base names an ordinary file, not a socket")
 
-// removeDeadSocket unlinks a socket pathname whose owner is known to be gone.
+// removeDeadSocket unlinks a socket pathname whose owner is known to be gone. It refuses
+// anything that is not a socket, returning errHybridBaseNotASocket and leaving the file in
+// place, and it treats a missing pathname as already removed.
 func removeDeadSocket(path string) error {
 	owner, err := safefile.OpenDeleteHandle(path)
 	if err != nil {
@@ -499,6 +506,9 @@ func removeDeadSocket(path string) error {
 func (l *openvmmLauncher) Terminate(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ladderBudget)
 	defer cancel()
+
+	l.terminateMu.Lock()
+	defer l.terminateMu.Unlock()
 
 	l.mu.Lock()
 	child, socketPath := l.child, l.socketPath
