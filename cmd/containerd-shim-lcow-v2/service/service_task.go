@@ -34,7 +34,7 @@ func (s *Service) State(ctx context.Context, request *task.StateRequest) (resp *
 	}()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID),
 		attribute.String(logfields.ExecID, request.ExecID))
 
@@ -55,7 +55,7 @@ func (s *Service) Create(ctx context.Context, request *task.CreateTaskRequest) (
 	}()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID),
 		attribute.String(logfields.Bundle, request.Bundle),
 		attribute.Bool(logfields.Terminal, request.Terminal),
@@ -82,7 +82,7 @@ func (s *Service) Start(ctx context.Context, request *task.StartRequest) (resp *
 	}()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID),
 		attribute.String(logfields.ExecID, request.ExecID))
 
@@ -106,7 +106,7 @@ func (s *Service) Delete(ctx context.Context, request *task.DeleteRequest) (resp
 	}()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID),
 		attribute.String(logfields.ExecID, request.ExecID))
 
@@ -122,7 +122,7 @@ func (s *Service) Pids(ctx context.Context, request *task.PidsRequest) (resp *ta
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID))
 
 	r, e := s.pidsInternal(ctx, request)
@@ -137,7 +137,7 @@ func (s *Service) Pause(ctx context.Context, request *task.PauseRequest) (resp *
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID))
 
 	r, e := s.pauseInternal(ctx, request)
@@ -152,7 +152,7 @@ func (s *Service) Resume(ctx context.Context, request *task.ResumeRequest) (resp
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID))
 
 	r, e := s.resumeInternal(ctx, request)
@@ -167,7 +167,7 @@ func (s *Service) Checkpoint(ctx context.Context, request *task.CheckpointTaskRe
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID),
 		attribute.String(logfields.Path, request.Path))
 
@@ -183,7 +183,7 @@ func (s *Service) Kill(ctx context.Context, request *task.KillRequest) (resp *em
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID),
 		attribute.String(logfields.ExecID, request.ExecID),
 		attribute.Int64(logfields.Signal, int64(request.Signal)),
@@ -201,7 +201,7 @@ func (s *Service) Exec(ctx context.Context, request *task.ExecProcessRequest) (r
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID),
 		attribute.String(logfields.ExecID, request.ExecID),
 		attribute.Bool(logfields.Terminal, request.Terminal),
@@ -221,7 +221,7 @@ func (s *Service) ResizePty(ctx context.Context, request *task.ResizePtyRequest)
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID),
 		attribute.String(logfields.ExecID, request.ExecID),
 		attribute.Int64(logfields.Width, int64(request.Width)),
@@ -239,7 +239,7 @@ func (s *Service) CloseIO(ctx context.Context, request *task.CloseIORequest) (re
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID),
 		attribute.String(logfields.ExecID, request.ExecID),
 		attribute.Bool(logfields.Stdin, request.Stdin))
@@ -256,7 +256,7 @@ func (s *Service) Update(ctx context.Context, request *task.UpdateTaskRequest) (
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID))
 
 	r, e := s.updateInternal(ctx, request)
@@ -278,7 +278,7 @@ func (s *Service) Wait(ctx context.Context, request *task.WaitRequest) (resp *ta
 	}()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID),
 		attribute.String(logfields.ExecID, request.ExecID))
 
@@ -294,7 +294,7 @@ func (s *Service) Stats(ctx context.Context, request *task.StatsRequest) (resp *
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID))
 
 	r, e := s.statsInternal(ctx, request)
@@ -317,7 +317,7 @@ func (s *Service) Connect(ctx context.Context, request *task.ConnectRequest) (re
 	}()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID))
 
 	// We treat the shim/task as the same pid on the Windows host.
@@ -337,7 +337,7 @@ func (s *Service) Shutdown(ctx context.Context, request *task.ShutdownRequest) (
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.ID, request.ID))
 
 	r, e := s.shutdownInternal(ctx, request)

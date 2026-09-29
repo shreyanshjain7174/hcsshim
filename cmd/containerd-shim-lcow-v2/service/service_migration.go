@@ -27,7 +27,7 @@ func (s *Service) PrepareAndExportSandbox(ctx context.Context, request *migratio
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.SessionID, request.SessionID))
 
 	// Set the session id in the logger context for all subsequent logs in this request.
@@ -46,7 +46,7 @@ func (s *Service) ImportSandbox(ctx context.Context, request *migration.ImportSa
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.SessionID, request.SessionID))
 
 	// Set the session id in the logger context for all subsequent logs in this request.
@@ -65,7 +65,7 @@ func (s *Service) PrepareSandbox(ctx context.Context, request *migration.Prepare
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.SessionID, request.SessionID))
 
 	// Set the session id in the logger context for all subsequent logs in this request.
@@ -84,7 +84,7 @@ func (s *Service) TransferSandbox(ctx context.Context, request *migration.Transf
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.SessionID, request.SessionID))
 	if request.Timeout != nil {
 		span.SetAttributes(attribute.Int64(logfields.Timeout, int64(request.Timeout.AsDuration())))
@@ -106,7 +106,7 @@ func (s *Service) FinalizeSandbox(ctx context.Context, request *migration.Finali
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.SessionID, request.SessionID),
 		attribute.String(logfields.Action, request.Action.String()))
 
@@ -126,7 +126,7 @@ func (s *Service) Notifications(ctx context.Context, request *migration.Notifica
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.SessionID, request.SessionID))
 
 	// Set the session id in the logger context for all subsequent logs in this request.
@@ -144,7 +144,7 @@ func (s *Service) CreateDuplicateSocket(ctx context.Context, request *migration.
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.SessionID, request.SessionID))
 
 	// Set the session id in the logger context for all subsequent logs in this request.
@@ -165,7 +165,7 @@ func (s *Service) Cancel(ctx context.Context, request *migration.CancelRequest) 
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.SessionID, request.SessionID))
 
 	// Set the session id in the logger context for all subsequent logs in this request.
@@ -185,7 +185,7 @@ func (s *Service) Cleanup(ctx context.Context, request *migration.CleanupRequest
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.SessionID, request.SessionID))
 
 	// Set the session id in the logger context for all subsequent logs in this request.

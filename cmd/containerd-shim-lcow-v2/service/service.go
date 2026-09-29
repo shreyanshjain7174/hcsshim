@@ -42,7 +42,11 @@ type Service struct {
 
 	// sandboxID is the unique identifier for the sandbox managed by this Service instance.
 	// For LCOW shim, sandboxID corresponds 1-1 with the UtilityVM managed by the shim.
+	// Access it through getSandboxID and setSandboxID.
 	sandboxID string
+	// idMu guards sandboxID on its own, since mu is held for the whole VM create
+	// and ShutdownSandbox must still be able to read the ID while that runs.
+	idMu sync.Mutex
 
 	// vmController is responsible for managing the lifecycle of the underlying
 	// utility VM.
@@ -128,7 +132,19 @@ func (s *Service) ensureMigrationIdle() error {
 
 // SandboxID returns the unique identifier for the sandbox managed by this Service.
 func (s *Service) SandboxID() string {
+	return s.getSandboxID()
+}
+
+func (s *Service) getSandboxID() string {
+	s.idMu.Lock()
+	defer s.idMu.Unlock()
 	return s.sandboxID
+}
+
+func (s *Service) setSandboxID(id string) {
+	s.idMu.Lock()
+	defer s.idMu.Unlock()
+	s.sandboxID = id
 }
 
 // send enqueues an event onto the internal events channel so that it can be

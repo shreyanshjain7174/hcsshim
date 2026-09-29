@@ -65,8 +65,8 @@ func (s *Service) createSandboxInternal(ctx context.Context, request *sandbox.Cr
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if s.sandboxID != "" {
-		return nil, fmt.Errorf("sandbox already exists with ID %s", s.sandboxID)
+	if id := s.getSandboxID(); id != "" {
+		return nil, fmt.Errorf("sandbox already exists with ID %s", id)
 	}
 
 	err = s.vmController.CreateVM(ctx, &vm.CreateOptions{
@@ -84,7 +84,7 @@ func (s *Service) createSandboxInternal(ctx context.Context, request *sandbox.Cr
 	// will fail with an error.
 	// Also, setting it here acts as a synchronization point - we know that if sandboxID is set,
 	// then the VM has been created successfully and sandboxOptions has been populated.
-	s.sandboxID = request.SandboxID
+	s.setSandboxID(request.SandboxID)
 
 	return &sandbox.CreateSandboxResponse{}, nil
 }
@@ -95,8 +95,8 @@ func (s *Service) createSandboxInternal(ctx context.Context, request *sandbox.Cr
 // sandbox was created with confidential settings, confidential options are
 // applied to the VM after starting.
 func (s *Service) startSandboxInternal(ctx context.Context, request *sandbox.StartSandboxRequest) (*sandbox.StartSandboxResponse, error) {
-	if s.sandboxID != request.SandboxID {
-		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", s.sandboxID, request.SandboxID)
+	if id := s.getSandboxID(); id != request.SandboxID {
+		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", id, request.SandboxID)
 	}
 
 	// VM controller ensures that only once of the Start call goes through.
@@ -117,8 +117,8 @@ func (s *Service) startSandboxInternal(ctx context.Context, request *sandbox.Sta
 // It returns the guest OS and CPU architecture for the sandbox.
 // An error is returned if the sandbox is not currently in the created state.
 func (s *Service) platformInternal(_ context.Context, request *sandbox.PlatformRequest) (*sandbox.PlatformResponse, error) {
-	if s.sandboxID != request.SandboxID {
-		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", s.sandboxID, request.SandboxID)
+	if id := s.getSandboxID(); id != request.SandboxID {
+		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", id, request.SandboxID)
 	}
 
 	if s.vmController.State() == vm.StateNotCreated {
@@ -144,8 +144,8 @@ func (s *Service) platformInternal(_ context.Context, request *sandbox.PlatformR
 //
 // It terminates the VM and performs any cleanup, if needed.
 func (s *Service) stopSandboxInternal(ctx context.Context, request *sandbox.StopSandboxRequest) (*sandbox.StopSandboxResponse, error) {
-	if s.sandboxID != request.SandboxID {
-		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", s.sandboxID, request.SandboxID)
+	if id := s.getSandboxID(); id != request.SandboxID {
+		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", id, request.SandboxID)
 	}
 
 	err := s.vmController.TerminateVM(ctx)
@@ -161,8 +161,8 @@ func (s *Service) stopSandboxInternal(ctx context.Context, request *sandbox.Stop
 // It blocks until the underlying VM has been terminated, then maps the exit status
 // to a sandbox exit code.
 func (s *Service) waitSandboxInternal(ctx context.Context, request *sandbox.WaitSandboxRequest) (*sandbox.WaitSandboxResponse, error) {
-	if s.sandboxID != request.SandboxID {
-		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", s.sandboxID, request.SandboxID)
+	if id := s.getSandboxID(); id != request.SandboxID {
+		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", id, request.SandboxID)
 	}
 
 	// Wait for the VM to be terminated, then return the exit code.
@@ -195,8 +195,8 @@ func (s *Service) waitSandboxInternal(ctx context.Context, request *sandbox.Wait
 // When verbose is true, the response may be extended with additional
 // diagnostic information.
 func (s *Service) sandboxStatusInternal(_ context.Context, request *sandbox.SandboxStatusRequest) (*sandbox.SandboxStatusResponse, error) {
-	if s.sandboxID != request.SandboxID {
-		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", s.sandboxID, request.SandboxID)
+	if id := s.getSandboxID(); id != request.SandboxID {
+		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", id, request.SandboxID)
 	}
 
 	resp := &sandbox.SandboxStatusResponse{
@@ -246,8 +246,8 @@ func (s *Service) pingSandboxInternal(_ context.Context, _ *sandbox.PingRequest)
 func (s *Service) shutdownSandboxInternal(ctx context.Context, request *sandbox.ShutdownSandboxRequest) (*sandbox.ShutdownSandboxResponse, error) {
 	// An empty sandboxID means CreateSandbox failed; containerd still sends
 	// ShutdownSandbox to reap the shim, so accept it.
-	if s.sandboxID != "" && s.sandboxID != request.SandboxID {
-		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", s.sandboxID, request.SandboxID)
+	if id := s.getSandboxID(); id != "" && id != request.SandboxID {
+		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", id, request.SandboxID)
 	}
 
 	// Ensure the VM is terminated. If the VM is already terminated,
@@ -280,8 +280,8 @@ func (s *Service) shutdownSandboxInternal(ctx context.Context, request *sandbox.
 //
 // It collects and returns runtime statistics from the vmController.
 func (s *Service) sandboxMetricsInternal(ctx context.Context, request *sandbox.SandboxMetricsRequest) (*sandbox.SandboxMetricsResponse, error) {
-	if s.sandboxID != request.SandboxID {
-		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", s.sandboxID, request.SandboxID)
+	if id := s.getSandboxID(); id != request.SandboxID {
+		return nil, fmt.Errorf("sandbox ID mismatch, expected %s, got %s", id, request.SandboxID)
 	}
 
 	stats, err := s.vmController.Stats(ctx)
