@@ -453,8 +453,10 @@ func (s *System) CloseCtx(ctx context.Context) error {
 	launcherTerminated := s.launcherTerminated
 	s.lifecycleMu.Unlock()
 
-	var closeErr error
+	var closeErr, quitErr error
+	failures := 0
 	fail := func(err error) {
+		failures++
 		if closeErr == nil {
 			closeErr = err
 			return
@@ -479,8 +481,12 @@ func (s *System) CloseCtx(ctx context.Context) error {
 
 	if !quitAttempted {
 		quitAttempted = true
-		if err := s.quit(ctx); err != nil {
-			fail(fmt.Errorf("failed to quit the vmservice host for compute system %s: %w", s.id, err))
+		quitStart := time.Now()
+		err := s.quit(ctx)
+		log.G(context.Background()).WithField("duration", time.Since(quitStart).String()).WithError(err).Info("OpenVMM Quit returned")
+		if err != nil {
+			quitErr = fmt.Errorf("failed to quit the vmservice host for compute system %s: %w", s.id, err)
+			fail(quitErr)
 		}
 	}
 	if !connClosed {
@@ -523,6 +529,12 @@ func (s *System) CloseCtx(ctx context.Context) error {
 	if closed {
 		s.finishWait(hcs.ErrAlreadyClosed)
 		s.waitCancel()
+	}
+	// A failed Quit is not an error once everything else is released: containerd skips its own
+	// cleanup on any stop error.
+	if closed && failures == 1 && quitErr != nil {
+		log.G(context.Background()).WithError(quitErr).Warn("OpenVMM host did not answer Quit, but it is terminated and released")
+		return nil
 	}
 	return closeErr
 }

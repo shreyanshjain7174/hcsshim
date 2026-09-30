@@ -194,8 +194,8 @@ func TestSystemCloseRunsLaterRungsWhenQuitHangs(t *testing.T) {
 
 	select {
 	case err := <-done:
-		if err == nil {
-			t.Fatal("CloseCtx with a hung Quit: want an error, got nil")
+		if err != nil {
+			t.Fatalf("CloseCtx with a hung Quit and a terminated process = %v, want nil", err)
 		}
 	case <-time.After(60 * time.Second):
 		t.Fatal("CloseCtx never returned while Quit was hung")

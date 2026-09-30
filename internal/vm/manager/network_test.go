@@ -42,6 +42,7 @@ type fakeModifyVMClient struct {
 	modifyRelease <-chan struct{}
 	quitCalls     int
 	quitBlock     <-chan struct{}
+	quitErr       error
 	teardownCalls int
 	waitBlock     <-chan struct{}
 	waitErr       error
@@ -184,6 +185,9 @@ func (f *fakeModifyVMClient) Quit(ctx context.Context, _ *emptypb.Empty, _ ...gr
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if f.quitErr != nil {
+		return nil, f.quitErr
 	}
 	return &emptypb.Empty{}, nil
 }
