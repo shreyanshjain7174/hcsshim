@@ -527,6 +527,9 @@ func (c *Controller) DumpStacks(ctx context.Context) (string, error) {
 	return "", nil
 }
 
+// logOutputDrainGrace is how long Wait lets guest log processing finish after the VM exits.
+var logOutputDrainGrace = 5 * time.Second
+
 // Wait blocks until the VM exits and all log output processing has completed.
 func (c *Controller) Wait(ctx context.Context) error {
 	ctx, _ = log.WithContext(ctx, logrus.WithField(logfields.Operation, "Wait"))
@@ -552,11 +555,17 @@ func (c *Controller) Wait(ctx context.Context) error {
 
 	// Wait for the log output processing to complete,
 	// which ensures all logs are processed before we return.
+	// A log reader that outlives the VM must not hold Wait, and the sandbox wait built on it,
+	// open forever, so the wait is bounded once the VM has exited.
+	drain := time.NewTimer(logOutputDrainGrace)
+	defer drain.Stop()
 	select {
 	case <-ctx.Done():
 		ctxErr := fmt.Errorf("failed to wait on uvm output processing: %w", ctx.Err())
 		err = errors.Join(err, ctxErr)
 	case <-c.logOutputDone:
+	case <-drain.C:
+		log.G(ctx).WithField("grace", logOutputDrainGrace.String()).Warn("VM log output did not finish after the VM exited, not waiting for it any longer")
 	}
 
 	return err
