@@ -54,7 +54,7 @@ var (
 	// file. That answer proves the pathname is occupied by something this launcher never
 	// created, so it is preserved: not-a-socket is evidence of a misconfiguration or of
 	// another owner's data, never of a stale socket this launcher may unlink.
-	errVMServiceSocketNotASocket = safefile.ErrSocketPathNotASocket
+	errVMServiceSocketNotASocket = errors.New("the configured VM service socket path names an ordinary file, not a socket")
 )
 
 const childDiagnosticLimit = 8 << 10
@@ -297,14 +297,14 @@ func (l *openvmmLauncher) Launch(ctx context.Context, id string) (string, error)
 		return "", fmt.Errorf("cannot launch %s: %w", id, err)
 	}
 
-	if err := l.claimSocketPath(ctx, socketPath); err != nil {
+	if err := l.claimSocketPath(ctx, socketPath, errVMServiceSocketNotASocket); err != nil {
 		claimErr := l.abandonClaim(ctx, claim)
 		l.release()
 		return "", errors.Join(err, claimErr)
 	}
 	// OpenVMM binds the hybrid-vsock base itself and never unlinks it.
 	if base := l.config.HybridVsockBase; base != "" {
-		if err := l.claimSocketPath(ctx, base); err != nil {
+		if err := l.claimSocketPath(ctx, base, errHybridBaseNotASocket); err != nil {
 			claimErr := l.abandonClaim(ctx, claim)
 			l.release()
 			return "", errors.Join(err, claimErr)
@@ -416,8 +416,8 @@ func (l *openvmmLauncher) abandonClaim(ctx context.Context, claim *hostSocketCla
 // no. An answer that does not prove the pathname stale means no. An ordinary file means no,
 // and it is preserved. Only a definitively dead socket is removed, and the removal happens
 // through a handle to that exact object rather than by pathname.
-func (l *openvmmLauncher) claimSocketPath(ctx context.Context, socketPath string) error {
-	return safefile.ClaimSocketPath(ctx, socketPath, safefile.ClaimSocketPathOptions{
+func (l *openvmmLauncher) claimSocketPath(ctx context.Context, socketPath string, notASocketError error) error {
+	err := safefile.ClaimSocketPath(ctx, socketPath, safefile.ClaimSocketPathOptions{
 		ProbeDial:              l.probeDial,
 		ProbeBudget:            socketProbeBudget,
 		InUseError:             errVMServiceSocketInUse,
@@ -425,9 +425,13 @@ func (l *openvmmLauncher) claimSocketPath(ctx context.Context, socketPath string
 		PathDescription:        "socket pathname",
 		ProbeNotASocketIsError: true,
 	})
+	if errors.Is(err, safefile.ErrSocketPathNotASocket) {
+		return fmt.Errorf("%w: %w", notASocketError, err)
+	}
+	return err
 }
 
-var errHybridBaseNotASocket = errVMServiceSocketNotASocket
+var errHybridBaseNotASocket = errors.New("the configured hybrid-vsock base names an ordinary file, not a socket")
 
 // removeDeadSocket unlinks a socket pathname whose owner is known to be gone. It refuses
 // anything that is not a socket, returning errHybridBaseNotASocket and leaving the file in
@@ -445,7 +449,7 @@ func removeDeadSocket(path string) error {
 		return errors.Join(fmt.Errorf("cannot inspect %s: %w", path, err), owner.Close())
 	}
 	if mode&os.ModeSocket == 0 {
-		return errors.Join(fmt.Errorf("refusing to unlink %s: %w", path, errHybridBaseNotASocket), owner.Close())
+		return errors.Join(fmt.Errorf("refusing to unlink %s: %w: %w", path, errHybridBaseNotASocket, safefile.ErrSocketPathNotASocket), owner.Close())
 	}
 	if err := owner.Remove(); err != nil {
 		return errors.Join(fmt.Errorf("cannot remove %s: %w", path, err), owner.Close())

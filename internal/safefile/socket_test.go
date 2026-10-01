@@ -44,6 +44,40 @@ func TestClaimSocketPathRefusesLivePeer(t *testing.T) {
 	}
 }
 
+func TestClaimSocketPathPinsSocketBeforeProbe(t *testing.T) {
+	path := shortSocketPath(t)
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	listener.SetUnlinkOnClose(false)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	errInUse := errors.New("socket path in use")
+	var removeErr error
+	err = ClaimSocketPath(context.Background(), path, ClaimSocketPathOptions{
+		ProbeDial: func(context.Context, string, string) (net.Conn, error) {
+			removeErr = os.Remove(path)
+			local, remote := net.Pipe()
+			_ = remote.Close()
+			return local, nil
+		},
+		ProbeBudget:       2 * time.Second,
+		InUseError:        errInUse,
+		InconclusiveError: errors.New("socket probe inconclusive"),
+		PathDescription:   "test socket path",
+	})
+	if !errors.Is(err, errInUse) {
+		t.Fatalf("ClaimSocketPath error = %v, want %v", err, errInUse)
+	}
+	if removeErr == nil {
+		t.Fatal("socket path was removable while the probe was running")
+	}
+	if _, statErr := os.Lstat(path); statErr != nil {
+		t.Fatalf("live socket path was not preserved: %v", statErr)
+	}
+}
+
 func TestClaimSocketPathPreservesOrdinaryFileAndReturnsNotASocket(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "ordinary.sock")
 	const contents = "ordinary file"

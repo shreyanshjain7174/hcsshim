@@ -13,18 +13,21 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-var ErrSocketPathNotASocket = errors.New("the configured VM service socket path names an ordinary file, not a socket")
+var ErrSocketPathNotASocket = errors.New("the path names an ordinary file, not a socket")
 
 type ClaimSocketPathOptions struct {
-	ProbeDial              func(context.Context, string, string) (net.Conn, error)
-	ProbeBudget            time.Duration
-	InUseError             error
-	InconclusiveError      error
-	PathDescription        string
-	PathNotFoundIsUnused   bool
+	ProbeDial         func(context.Context, string, string) (net.Conn, error)
+	ProbeBudget       time.Duration
+	InUseError        error
+	InconclusiveError error
+	PathDescription   string
+	// PathNotFoundIsUnused treats ERROR_PATH_NOT_FOUND as proof that the socket is unused.
+	PathNotFoundIsUnused bool
+	// ProbeNotASocketIsError treats WSAENOTSOCK as an ordinary-file error.
 	ProbeNotASocketIsError bool
 }
 
+// ClaimSocketPath removes path only when a pinned socket probe proves it unused.
 func ClaimSocketPath(ctx context.Context, path string, options ClaimSocketPathOptions) error {
 	owner, err := OpenDeleteHandle(path)
 	if err != nil {
@@ -56,6 +59,7 @@ func ClaimSocketPath(ctx context.Context, path string, options ClaimSocketPathOp
 		_ = owner.Close()
 		return fmt.Errorf("refusing to unlink the %s %s: %w", options.PathDescription, path, ErrSocketPathNotASocket)
 	}
+	// Timeouts, access denied, unknown errors, and unselected not-a-socket remain inconclusive.
 	if !socketDefinitelyUnused(probeErr, options.PathNotFoundIsUnused) {
 		_ = owner.Close()
 		return fmt.Errorf("refusing to unlink the %s %s: %w: %v", options.PathDescription, path, options.InconclusiveError, probeErr)
