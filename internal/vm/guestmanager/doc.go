@@ -11,11 +11,14 @@ layer above.
 
 # Creating a Guest
 
-After the UVM has been started via vmmanager, create a [Guest] and establish the
-GCS connection:
+Create a [Guest] before starting the UVM so its listeners can be prepared before
+the guest dials them.
 
-	g, err := guestmanager.New(ctx, uvm)
-	if err != nil { // handle error }
+The VM controller creates one [transport.Factory] per utility VM and hands it here, so
+every guest listener - the GCS service and the dynamic process-IO ports - comes from the
+same factory and is cleaned up by the controller that owns it:
+
+	g := guestmanager.New(ctx, uvm, factory)
 	if err := g.PrepareConnection(gcsServiceID); err != nil { // handle error }
 	// (start the UVM here)
 	if err := g.CreateConnection(ctx, true); err != nil { // handle error }
