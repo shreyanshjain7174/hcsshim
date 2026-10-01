@@ -22,13 +22,11 @@ import (
 )
 
 var (
-	// readinessBudget bounds the active readiness wait when the caller supplies no
-	// deadline of its own. A caller deadline that is earlier still wins.
+	// Earlier caller deadlines still win.
 	readinessBudget = 90 * time.Second
 	// ladderBudget bounds the whole termination ladder.
 	ladderBudget = 30 * time.Second
-	// gracefulExitBudget is rung 3's share: how long the owned child is given to leave on
-	// its own after the vmservice Quit that rung 2 already issued.
+	// System has already issued Quit before this grace period.
 	gracefulExitBudget = 5 * time.Second
 	// socketProbeBudget bounds the connect that must fail before a pathname is unlinked.
 	socketProbeBudget = 2 * time.Second
@@ -37,23 +35,15 @@ var (
 )
 
 var (
-	// errVMServiceSocketInUse reports a live peer answering on the configured pathname.
-	// Because that pathname is host-shared, unlinking it would break the other shim's VM,
-	// so the launcher refuses and supports one concurrent OpenVMM sandbox per host.
+	// Unlinking a live listener would break another shim's VM.
 	errVMServiceSocketInUse = errors.New("the configured VM service socket already has a live listener")
 	// errOneVMPerShimProcess reports a second launch while a child is live.
 	errOneVMPerShimProcess = errors.New("this shim process already owns a live OpenVMM child")
-	// errLauncherAlreadyUsed reports a launch after this launcher's one child was cleaned
-	// up. The Terminate contract carries no id, so a relaunched launcher would let a
-	// late close for one sandbox kill another one's child.
+	// Terminate has no id, so reuse could let a late close kill another sandbox's child.
 	errLauncherAlreadyUsed = errors.New("this launcher has already run its one VM and cannot launch again")
-	// errSocketProbeInconclusive reports a probe failure that does not prove the
-	// configured pathname is stale. The launcher preserves the pathname.
+	// An inconclusive probe is not permission to unlink.
 	errSocketProbeInconclusive = errors.New("the configured VM service socket probe was inconclusive")
-	// errVMServiceSocketNotASocket reports that the configured pathname names an ordinary
-	// file. That answer proves the pathname is occupied by something this launcher never
-	// created, so it is preserved: not-a-socket is evidence of a misconfiguration or of
-	// another owner's data, never of a stale socket this launcher may unlink.
+	// An ordinary file belongs to another owner, not to stale-socket cleanup.
 	errVMServiceSocketNotASocket = errors.New("the configured VM service socket path names an ordinary file, not a socket")
 )
 
@@ -84,8 +74,7 @@ func (b *boundedBuffer) String() string {
 	return b.buf.String()
 }
 
-// ownedChild is the process handle this package started. Nothing here looks a process up
-// by identifier or image.
+// PID or image lookup could target a replacement process instead of the owned child.
 type ownedChild interface {
 	Exited() <-chan struct{}
 	Wait(ctx context.Context) error
@@ -93,12 +82,8 @@ type ownedChild interface {
 	Close() error
 }
 
-// startProcess is the owned-handle spawn seam. Tests replace it to assert the executable
-// and the exact argv without introducing a second configuration source.
 var startProcess = func(exe string, args []string) (ownedChild, error) {
-	// exec.Command, not exec.CommandContext: the caller's context bounds the launch, never
-	// the child's lifetime. A second owner able to kill the child outside the ladder would
-	// put the one thing cleanup describes beyond cleanup's control.
+	// CommandContext would let caller cancellation kill the child outside the ladder.
 	command := exec.Command(exe, args...)
 	stderr := &boundedBuffer{limit: childDiagnosticLimit}
 	command.Stderr = stderr
@@ -146,7 +131,6 @@ type processChild struct {
 
 func (c *processChild) Exited() <-chan struct{} { return c.exited }
 
-// Wait blocks until the owned child is gone or ctx expires.
 func (c *processChild) Wait(ctx context.Context) error {
 	select {
 	case <-c.exited:
@@ -161,8 +145,6 @@ func (c *processChild) Wait(ctx context.Context) error {
 	}
 }
 
-// Kill signals the child through the handle this package started. There is no lookup by
-// identifier or by image anywhere on this path.
 func (c *processChild) Kill() error {
 	select {
 	case <-c.exited:
@@ -181,8 +163,7 @@ func (c *processChild) Kill() error {
 	return nil
 }
 
-// Close releases the owned handles. Closing the kill-on-close job is what guarantees that
-// nothing the child started outlives this process.
+// Closing the job also kills descendants that would otherwise outlive the shim.
 func (c *processChild) Close() error {
 	c.closeMu.Lock()
 	defer c.closeMu.Unlock()
@@ -231,9 +212,7 @@ func assignToJob(job windows.Handle, process *os.Process) error {
 	return nil
 }
 
-// openvmmLauncher owns one child for the life of this shim process. It holds no client and
-// issues no VM service RPC: rungs 1 and 2 of the composed termination ladder belong to
-// System, and this type implements the process and socket cleanup rungs.
+// System owns teardown and Quit; the launcher owns the later process and socket rungs.
 type openvmmLauncher struct {
 	config    *Config
 	probeDial readinessDial
@@ -241,19 +220,16 @@ type openvmmLauncher struct {
 	poll      time.Duration
 
 	mu sync.Mutex
-	// terminateMu serializes whole Terminate ladders. Overlapping ladders would race to delete
-	// the same sockets and report each other's sharing violations. It is never held with mu.
+	// Serializes socket cleanup to avoid sharing violations; never held with mu.
 	terminateMu sync.Mutex
 	child       ownedChild
 	childID     string
 	socketPath  string
 	launching   bool
 	terminal    bool
-	// claim is this shim process's exclusive host-level right to the configured pathname.
-	// It is taken before the pathname is probed and released only once cleanup is verified.
+	// Held from before the probe until cleanup is verified.
 	claim *hostSocketClaim
-	// socketOwner is a delete-denying handle to the exact socket object the child bound.
-	// Cleanup deletes through it, so no pathname lookup can redirect the delete.
+	// Delete-denying handle prevents cleanup from deleting a replacement socket.
 	socketOwner *safefile.DeleteHandle
 }
 
@@ -268,9 +244,7 @@ func newLauncher(config *Config) *openvmmLauncher {
 	}
 }
 
-// Launch starts the configured binary, waits actively for readiness, and returns the socket
-// path it created, byte for byte as configured. The id is log identity and the one-child
-// record; it is never path material, because ids are far wider than the AF_UNIX budget.
+// IDs are log identity, not path material: they exceed the AF_UNIX path budget.
 func (l *openvmmLauncher) Launch(ctx context.Context, id string) (string, error) {
 	if l.config == nil {
 		return "", fmt.Errorf("cannot launch %s: %w", id, errLauncherNotConfigured)
@@ -281,9 +255,7 @@ func (l *openvmmLauncher) Launch(ctx context.Context, id string) (string, error)
 
 	socketPath := l.config.VMServiceSocket
 
-	// The host claim comes before the probe, the unlink, and the spawn, and it is held
-	// through cleanup. Probing first would let a second shim decide the pathname is stale
-	// in the window between this shim's probe and its bind.
+	// Claim before probing so another shim cannot take the pathname before this one binds.
 	reclaimStrandedClaim(socketPath)
 	claim, err := acquireSocketClaim(socketPath)
 	if err != nil {
@@ -328,15 +300,12 @@ func (l *openvmmLauncher) Launch(ctx context.Context, id string) (string, error)
 		readyErr = errors.New("the OpenVMM child was cleaned up while VM service readiness was being committed")
 	}
 
-	// The caller's context is already spent by construction on a timeout, so cleanup runs
-	// on a bounded context detached from it. Leaking the child is the one outcome that is
-	// worse than a slow failure.
+	// Readiness may exhaust the caller's context; cleanup must still run.
 	cleanupCtx, cancelCleanup := context.WithTimeout(context.WithoutCancel(ctx), ladderBudget)
 	defer cancelCleanup()
 	if err := l.Terminate(cleanupCtx); err != nil {
 		log.G(cleanupCtx).WithField("id", id).WithError(err).Warn("the OpenVMM termination ladder reported an error after a readiness failure")
 	}
-	// Entering cleanup is not evidence; the owned handle is.
 	if err := child.Wait(cleanupCtx); err != nil {
 		return "", withChildDiagnostic(fmt.Errorf("cannot launch %s: readiness failed and the owned child is still running: %w", id, errors.Join(readyErr, err)), child)
 	}
@@ -355,8 +324,6 @@ func withChildDiagnostic(err error, child ownedChild) error {
 	return fmt.Errorf("%w (OpenVMM stderr: %s)", err, diagnostic)
 }
 
-// reserve admits exactly one launch. It refuses a relaunch after cleanup and a second
-// concurrent launch, naming both ids so the refusal is diagnosable.
 func (l *openvmmLauncher) reserve(id string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -371,8 +338,6 @@ func (l *openvmmLauncher) reserve(id string) error {
 	return nil
 }
 
-// release undoes a reservation that never produced a child, so a failed spawn leaves the
-// launcher reusable and a retry reports the original cause rather than a terminal refusal.
 func (l *openvmmLauncher) release() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -389,8 +354,6 @@ func (l *openvmmLauncher) adopt(child ownedChild, socketPath string, claim *host
 	l.mu.Unlock()
 }
 
-// abandonClaim releases a claim taken for a launch that never produced an owned child, so
-// the next attempt - in this process or another - is not locked out by a dead reservation.
 func (l *openvmmLauncher) abandonClaim(ctx context.Context, claim *hostSocketClaim) error {
 	if claim == nil {
 		return nil
@@ -405,11 +368,6 @@ func (l *openvmmLauncher) abandonClaim(ctx context.Context, claim *hostSocketCla
 	return nil
 }
 
-// claimSocketPath decides whether a configured pathname, the VM service socket or the
-// hybrid-vsock base, may be taken. A live peer means
-// no. An answer that does not prove the pathname stale means no. An ordinary file means no,
-// and it is preserved. Only a definitively dead socket is removed, and the removal happens
-// through a handle to that exact object rather than by pathname.
 func (l *openvmmLauncher) claimSocketPath(ctx context.Context, socketPath string, notASocketError error) error {
 	err := safefile.ClaimSocketPath(ctx, socketPath, safefile.ClaimSocketPathOptions{
 		ProbeDial:              l.probeDial,
@@ -427,9 +385,6 @@ func (l *openvmmLauncher) claimSocketPath(ctx context.Context, socketPath string
 
 var errHybridBaseNotASocket = errors.New("the configured hybrid-vsock base names an ordinary file, not a socket")
 
-// removeDeadSocket unlinks a socket pathname whose owner is known to be gone. It refuses
-// anything that is not a socket, returning errHybridBaseNotASocket and leaving the file in
-// place, and it treats a missing pathname as already removed.
 func removeDeadSocket(path string) error {
 	owner, err := safefile.OpenDeleteHandle(path)
 	if err != nil {
@@ -451,18 +406,7 @@ func removeDeadSocket(path string) error {
 	return nil
 }
 
-// Terminate runs the child-only rungs of the composed ladder:
-//
-//	3 bounded wait on the owned handle
-//	4 kill through the owned handle, then prove the child is gone
-//	5 close the owned handles
-//	6 remove the socket this launcher owns, through its ownership handle
-//	6b remove the hybrid-vsock base the exited child bound
-//	7 release the host claim on the configured pathname
-//
-// The first error is returned and later errors are logged. VM service teardown and quit belong to
-// System, which is why nothing here holds a client. It is idempotent, and it detaches from
-// the caller's cancellation immediately so cleanup still works for a cancelled caller.
+// Terminate follows System's teardown and Quit; release the host claim only after cleanup.
 func (l *openvmmLauncher) Terminate(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ladderBudget)
 	defer cancel()
@@ -505,8 +449,7 @@ func (l *openvmmLauncher) Terminate(ctx context.Context) error {
 		log.G(ctx).WithError(err).Warn("a later OpenVMM termination rung also failed")
 	}
 
-	// Rung 3. A budget expiry here is the expected transition to rung 4, not a failure:
-	// rung 2 asked the VM host to quit and this is how long it is given to comply.
+	// Quit gets a grace period before kill; expiry is escalation, not a cleanup failure.
 	exited := false
 	waitCtx, cancelWait := context.WithTimeout(ctx, gracefulExitBudget)
 	waitErr := child.Wait(waitCtx)
@@ -520,7 +463,6 @@ func (l *openvmmLauncher) Terminate(ctx context.Context) error {
 		record(fmt.Errorf("termination rung 3, the bounded wait on the owned OpenVMM child: %w", waitErr))
 	}
 
-	// Rung 4. Nothing is signalled when the child has already gone.
 	if !exited {
 		if err := child.Kill(); err != nil {
 			record(fmt.Errorf("termination rung 4, the owned kill: %w", err))
@@ -531,16 +473,12 @@ func (l *openvmmLauncher) Terminate(ctx context.Context) error {
 			exited = true
 		}
 	}
-	// Rung 5.
 	closeErr := child.Close()
 	if closeErr != nil {
 		record(fmt.Errorf("termination rung 5, closing the owned handles: %w", closeErr))
 	}
 
-	// Rung 6. Only the socket object this launcher's child bound, deleted through the
-	// handle captured at readiness so no replacement can be deleted in its place. When
-	// readiness never got that far, the host claim this launcher still holds is what makes
-	// a fresh capture of the pathname safe. The serial socket is owned by serialRelay.
+	// The host claim alone cannot prove ownership of an uncaptured socket object.
 	socketRemoved := true
 	if socketOwner != nil {
 		if err := socketOwner.Remove(); err != nil {
@@ -557,7 +495,7 @@ func (l *openvmmLauncher) Terminate(ctx context.Context) error {
 		}
 	}
 
-	// Rung 6b. The child is gone, so nothing can still be listening on its base.
+	// Remove the base only after child exit proves it cannot still be listening.
 	hybridRemoved := true
 	if exited && l.config != nil && l.config.HybridVsockBase != "" {
 		if err := removeDeadSocket(l.config.HybridVsockBase); err != nil {
@@ -566,9 +504,7 @@ func (l *openvmmLauncher) Terminate(ctx context.Context) error {
 		}
 	}
 
-	// Rung 7. The host claim is the last thing released, and only once the child is gone,
-	// its handles are closed, and the socket is confirmed removed. Releasing it earlier
-	// would let another shim take the pathname while this one still has work to do on it.
+	// Release the claim last so another shim cannot take paths this ladder still owns.
 	if exited && closeErr == nil && socketRemoved && hybridRemoved {
 		claimReleased := true
 		if claim != nil {

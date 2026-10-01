@@ -19,10 +19,9 @@ import (
 const (
 	// afUnixPathLimit is the AF_UNIX named-path limit, in UTF-8 bytes.
 	afUnixPathLimit = 107
-	// widestNumericSuffix is the widest suffix a numeric guest port can produce.
+	// OpenVMM represents guest ports as decimal uint32 values.
 	widestNumericSuffix = "_4294967295"
-	// hybridBaseLimit keeps every numeric derivation inside afUnixPathLimit. It is the
-	// same budget internal/vm/manager validates the configured base against.
+	// Keep this budget in sync with manager's config validation.
 	hybridBaseLimit = afUnixPathLimit - len(widestNumericSuffix)
 )
 
@@ -42,35 +41,27 @@ var (
 	ErrPathTooLong = errors.New("the derived hybrid vsock socket path is over the AF_UNIX byte limit")
 	// ErrPathInUse reports a live peer answering on the pathname this factory wanted.
 	ErrPathInUse = errors.New("a live peer answered on the hybrid vsock socket path")
-	// ErrProbeInconclusive reports a probe that did not prove the pathname stale. The
-	// pathname is preserved: an inconclusive answer must never become "looks dead".
+	// Inconclusive probes must never authorize unlinking.
 	ErrProbeInconclusive = errors.New("the hybrid vsock socket path probe did not prove the path stale")
 )
 
-// vsockTemplate is OpenVMM's embedding of an AF_VSOCK port into an AF_HYPERV service ID:
-// 00000000-facb-11e6-bd58-64006a7986d3, the VSOCK_TEMPLATE of
-// support/hybrid_vsock/src/lib.rs. It is the same template winio.VsockServiceID uses.
+// Must match OpenVMM's VSOCK_TEMPLATE in support/hybrid_vsock/src/lib.rs.
 var vsockTemplate = guid.GUID{
 	Data2: 0xfacb,
 	Data3: 0x11e6,
 	Data4: [8]byte{0xbd, 0x58, 0x64, 0x00, 0x6a, 0x79, 0x86, 0xd3},
 }
 
-// hybridFactory is the OpenVMM-backed factory. Every listener is an AF_UNIX socket under
-// the one configured base, and the base is carried through byte for byte.
 type hybridFactory struct {
 	base string
 	book bookkeeping
-	// probeDial is the connect used to decide whether a pathname is stale.
+	// Probe failures alone do not establish that a socket is stale.
 	probeDial func(ctx context.Context, network, address string) (net.Conn, error)
 }
 
 var _ Factory = (*hybridFactory)(nil)
 
-// NewHybrid returns the OpenVMM-backed factory. base is Config.HybridVsockBase, which is
-// byte-identical to the HVSocketConfig.Path handed to vmservice. It is used unmodified: no
-// Clean, no case folding, no separator fixups, because vmservice and this factory must
-// derive the same pathnames from the same bytes.
+// Preserve base bytes exactly so vmservice and this factory derive identical paths.
 func NewHybrid(base string) (Factory, error) {
 	if base == "" {
 		return nil, fmt.Errorf("cannot build a hybrid transport: %w", ErrEmptyBase)
@@ -87,14 +78,12 @@ func NewHybrid(base string) (Factory, error) {
 	}, nil
 }
 
-// portPath derives the numeric form: base + "_" + the decimal port, which is what
-// VsockPortOrId::host_uds_path builds for a vsock port.
+// Match VsockPortOrId::host_uds_path's numeric path format.
 func (f *hybridFactory) portPath(port uint32) string {
 	return f.base + "_" + strconv.FormatUint(uint64(port), 10)
 }
 
-// servicePath derives the service form. A service ID matching the vsock template collapses
-// through Data1 to the numeric form; any other GUID appends its lowercase GUID string.
+// Template GUIDs alias numeric ports in OpenVMM's hybrid-vsock protocol.
 func (f *hybridFactory) servicePath(serviceID guid.GUID) string {
 	if port, ok := templatePort(serviceID); ok {
 		return f.portPath(port)
@@ -102,7 +91,6 @@ func (f *hybridFactory) servicePath(serviceID guid.GUID) string {
 	return f.base + "_" + strings.ToLower(serviceID.String())
 }
 
-// templatePort reports the embedded vsock port of a template service ID.
 func templatePort(serviceID guid.GUID) (uint32, bool) {
 	stripped := serviceID
 	stripped.Data1 = 0
@@ -112,7 +100,6 @@ func templatePort(serviceID guid.GUID) (uint32, bool) {
 	return serviceID.Data1, true
 }
 
-// ListenService binds the path derived from serviceID.
 func (f *hybridFactory) ListenService(serviceID guid.GUID) (net.Listener, error) {
 	return f.listenAt(f.servicePath(serviceID))
 }
@@ -149,10 +136,7 @@ func (f *hybridFactory) listenAt(path string) (net.Listener, error) {
 	return f.book.commit(path, path, l, owner)
 }
 
-// claimPath refuses to unlink a pathname a live peer still answers on, and refuses to
-// unlink one whose probe was inconclusive. Only a definitive absent or refused answer
-// permits the unlink. The probe is detached from the caller's
-// cancellation, because a cancelled caller must not turn "in use" into "looks dead".
+// Caller cancellation must not turn an occupied socket into a stale-socket verdict.
 func (f *hybridFactory) claimPath(path string) error {
 	return safefile.ClaimSocketPath(context.Background(), path, safefile.ClaimSocketPathOptions{
 		ProbeDial:            f.probeDial,

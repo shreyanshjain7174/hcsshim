@@ -10,29 +10,18 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// errVMServiceSocketClaimed reports that another process on this host already holds the
-// claim on the configured VM service socket. The pathname comes from one host-wide
-// configuration file, so without a host-level claim two shim processes would each probe
-// it, each conclude it is stale, and each unlink and rebind it underneath the other.
+// Without a cross-process claim, shims can race between probing and rebinding the socket.
 var errVMServiceSocketClaimed = errors.New("another process on this host already holds the VM service socket claim")
 
-// socketClaimSuffix names the claim file. It sits beside the socket rather than in a
-// temporary directory so the claim shares the socket's configured location, and therefore
-// its access control, its volume, and its lifetime.
+// Keep the claim beside the socket to share its access control, volume, and lifetime.
 const socketClaimSuffix = ".shim-claim"
 
 func socketClaimPath(socketPath string) string { return socketPath + socketClaimSuffix }
 
 var acquireSocketClaim = acquireHostSocketClaim
 
-// hostSocketClaim is the exclusive, host-level right to probe, unlink, and rebind the one
-// configured VM service socket. It is a file rather than a process-local mutex because the
-// contenders are separate shim processes, and it is deliberately not a named mutex because
-// a file makes the holder visible on disk while it is held.
-//
-// CREATE_NEW makes acquisition atomic across processes, and FILE_FLAG_DELETE_ON_CLOSE
-// makes crash cleanup automatic: the kernel drops the name when the last handle goes,
-// including when the holder dies without unwinding, so a crashed shim strands nothing.
+// Claim files expose cross-process ownership on disk, unlike a process-local mutex.
+// CREATE_NEW is atomic; DELETE_ON_CLOSE removes the name when the last handle closes, even on crash.
 type hostSocketClaim struct {
 	path string
 
@@ -42,17 +31,10 @@ type hostSocketClaim struct {
 	close  func(windows.Handle) error
 }
 
-// strandedClaims remembers claims whose Release failed, by claim path. A failed release
-// leaves this process holding the exclusive handle, and the launcher that owned it is
-// discarded after each failed create, so without this a same-ID retry in the same shim would
-// be refused as if another process held the socket.
+// Failed releases outlive discarded launchers; retain the handle for same-ID retries.
 var strandedClaims sync.Map
 
-// reclaimStrandedClaim retries the release of a claim this process failed to release for
-// socketPath. It is the shim's own retry: the low-level acquire keeps its contract of refusing
-// while anyone holds the claim, and only the launcher that owns the VM calls this. If the
-// retry fails as well the handle is still held and the acquire that follows reports it, so
-// nothing is taken from another holder.
+// Retry only this process's stranded claims, never another shim's claim.
 func reclaimStrandedClaim(socketPath string) {
 	if stranded, ok := strandedClaims.Load(socketClaimPath(socketPath)); ok {
 		_ = stranded.(*hostSocketClaim).Release()
@@ -65,8 +47,7 @@ func acquireHostSocketClaim(socketPath string) (*hostSocketClaim, error) {
 	if err != nil {
 		return nil, fmt.Errorf("cannot claim the VM service socket %s: %w", socketPath, err)
 	}
-	// Share nothing: the claim is the one object no other process may open while it is
-	// held, which is what turns "the file exists" into "someone is alive and holding it".
+	// No sharing makes an existing claim evidence of a live holder.
 	handle, err := windows.CreateFile(
 		name,
 		windows.GENERIC_WRITE,
@@ -85,17 +66,13 @@ func acquireHostSocketClaim(socketPath string) (*hostSocketClaim, error) {
 	return &hostSocketClaim{path: claimPath, handle: handle, held: true, close: windows.CloseHandle}, nil
 }
 
-// claimHeldElsewhere is the whole "someone else has it" set. CREATE_NEW reports that the
-// name exists; a holder that shares nothing makes the same attempt report the violation
-// instead. Anything else is a real failure and is reported as one.
+// A no-sharing holder may report SHARING_VIOLATION instead of FILE_EXISTS.
 func claimHeldElsewhere(err error) bool {
 	return errors.Is(err, windows.ERROR_FILE_EXISTS) ||
 		errors.Is(err, windows.ERROR_ALREADY_EXISTS) ||
 		errors.Is(err, windows.ERROR_SHARING_VIOLATION)
 }
 
-// Release drops the claim. It is idempotent, so every failure path may call it without
-// first working out whether an earlier one already did.
 func (c *hostSocketClaim) Release() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

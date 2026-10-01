@@ -21,35 +21,28 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-// System is the vmservice-backed compute system.
 var (
 	_ vmmanager.ComputeSystem     = (*System)(nil)
 	_ vmmanager.TransportProvider = (*System)(nil)
 )
 
 var (
-	// systemQuitTimeout bounds the Quit RPC. Quit only asks the vmservice host to leave;
-	// the launcher termination ladder is what guarantees it, so a host that never answers
-	// must not hold up the rungs that follow.
+	// Quit must not hold up the launcher's later cleanup rungs.
 	systemQuitTimeout = 5 * time.Second
-	// systemCleanupTimeout bounds every other external cleanup call, so neither Terminate
-	// nor CloseCtx can wait on a wedged backend forever.
+	// Cleanup must remain bounded even when the backend is wedged.
 	systemCleanupTimeout = 30 * time.Second
 )
 
 type System struct {
 	id string
-	// runtimeID is assigned by the shim, not reported by the virtstack: vmservice
-	// exposes no VM GUID anywhere in its surface.
+	// vmservice exposes no VM GUID; the shim supplies this identity.
 	runtimeID     guid.GUID
 	transportBase string
 
 	client   vmservice.VMClient
 	launcher VMLauncher
 
-	// serialClose and connClose run their resource's Close on a worker, so a wedged
-	// stream cannot keep CloseCtx from reaching the launcher termination ladder. Either
-	// is nil when the system has no such resource.
+	// A wedged stream must not prevent the launcher termination ladder from running.
 	serialClose *asyncCloser
 	connClose   *asyncCloser
 
@@ -59,17 +52,12 @@ type System struct {
 	networkMu       sync.Mutex
 	networkBindings map[string]networkBinding
 
-	// cleanupMu serializes Terminate and CloseCtx. It is held across their RPCs;
-	// lifecycleMu never is.
+	// Held across cleanup RPCs; lifecycleMu never is.
 	cleanupMu sync.Mutex
 
-	// operationGate admits one mutation at a time. It is a one-token channel rather than
-	// a mutex so a waiter can abandon the queue: a mutation whose caller is cancelled, or
-	// that is queued behind an operation which ignores its cancelled context, must not be
-	// stuck until that operation decides to leave.
+	// Unlike a mutex, this lets waiters abandon a queue behind a stuck operation.
 	operationGate chan struct{}
-	// closingNotify is closed exactly once, when CloseCtx begins. It is what lets a queued
-	// mutation learn the system is closing without holding the gate.
+	// Closing wakes queued mutations without waiting for the operation gate.
 	closingNotify chan struct{}
 
 	lifecycleMu        sync.Mutex
@@ -98,15 +86,11 @@ type System struct {
 	waitFinish sync.Once
 	waitDone   chan struct{}
 
-	// migrationNotifications is non-nil and closed: returning nil would make a range
-	// over it block forever.
+	// A nil notification channel would make range block forever.
 	migrationNotifications chan hcsschema.OperationSystemMigrationNotificationInfo
 }
 
-// beginOperation admits one mutation. Admission is refused - not queued - once close has
-// begun, and a caller waiting for the gate is released by its own cancellation or by the
-// closing notification, whichever comes first. The closure check is repeated after the
-// token is held, because close may have begun while this caller waited.
+// Close can begin while admission waits, so recheck after acquiring the token.
 func (s *System) beginOperation(ctx context.Context) (context.Context, func(), error) {
 	if !s.operationStillAllowed() {
 		return nil, nil, fmt.Errorf("compute system %s is closed: %w", s.id, hcs.ErrAlreadyClosed)
@@ -177,12 +161,7 @@ func newSystem(id string, runtimeID guid.GUID, transportBase string, client vmse
 	return system
 }
 
-// asyncCloser runs one resource's Close on a worker goroutine so a caller can bound its
-// wait and move on. At most one worker exists at a time, so a retry that arrives while
-// the close is still blocked joins the existing attempt rather than starting a second.
-// A close that returned an error is retryable - the resource was never proven released,
-// which is the same rule the other CloseCtx rungs follow - and a close that returned nil
-// is terminal, so the resource is closed exactly once on the successful path.
+// Bound caller waits without duplicating a blocked Close or losing failed-close retries.
 type asyncCloser struct {
 	closeFn func() error
 
@@ -196,10 +175,7 @@ func newAsyncCloser(closeFn func() error) *asyncCloser {
 	return &asyncCloser{closeFn: closeFn}
 }
 
-// release starts or joins the close worker and waits up to budget for it. It reports
-// whether the resource is proven released, so a caller never records a close it did not
-// observe finish. A worker that outlives the budget keeps running: its outcome is what a
-// later release call observes.
+// A timed-out worker stays live so a later release can observe its result.
 func (a *asyncCloser) release(budget time.Duration) (bool, error) {
 	a.mu.Lock()
 	if a.released {
@@ -236,14 +212,11 @@ func (a *asyncCloser) release(budget time.Duration) (bool, error) {
 	}
 }
 
-// notImplemented names the method that has no vmservice answer, so a caller sees why
-// rather than a silent no-op.
 func (s *System) notImplemented(method string) error {
 	return fmt.Errorf("%s is not available on the %s backend for compute system %s: %w", method, BackendName, s.id, errdefs.ErrNotImplemented)
 }
 
-// Start resumes the created-but-paused VM. CreateVM leaves the VM paused, so ResumeVM is
-// what starts it. Start is legal exactly once.
+// CreateVM leaves the VM paused, so starting it requires ResumeVM.
 func (s *System) Start(ctx context.Context) error {
 	opCtx, finish, err := s.beginOperation(ctx)
 	if err != nil {
@@ -278,7 +251,6 @@ func (s *System) Start(ctx context.Context) error {
 	return nil
 }
 
-// Pause transitions a running VM to paused.
 func (s *System) Pause(ctx context.Context) error {
 	opCtx, finish, err := s.beginOperation(ctx)
 	if err != nil {
@@ -314,8 +286,6 @@ func (s *System) Pause(ctx context.Context) error {
 	return nil
 }
 
-// Resume transitions a paused VM back to running. It uses the same RPC as Start and is
-// reached only after Pause.
 func (s *System) Resume(ctx context.Context) error {
 	opCtx, finish, err := s.beginOperation(ctx)
 	if err != nil {
@@ -347,7 +317,6 @@ func (s *System) Resume(ctx context.Context) error {
 	return nil
 }
 
-// Terminate releases the VM's resources and unblocks WaitVM. It is idempotent.
 func (s *System) Terminate(ctx context.Context) error {
 	s.cleanupMu.Lock()
 	defer s.cleanupMu.Unlock()
@@ -359,8 +328,7 @@ func (s *System) Terminate(ctx context.Context) error {
 		return nil
 	}
 
-	// Detached and bounded: a cancelled caller must not skip the teardown that unblocks
-	// WaitVM, and a wedged backend must not make this call the new infinite wait.
+	// Caller cancellation must not skip teardown or strand WaitVM.
 	teardownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), systemCleanupTimeout)
 	defer cancel()
 
@@ -374,8 +342,6 @@ func (s *System) Terminate(ctx context.Context) error {
 	return nil
 }
 
-// quit asks the vmservice host to exit. The RPC runs on its own goroutine so a host that
-// never answers is abandoned at the deadline rather than stranding the later rungs.
 func (s *System) quit(ctx context.Context) error {
 	quitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), systemQuitTimeout)
 	defer cancel()
@@ -428,7 +394,6 @@ func (s *System) networkReleaseResult(done <-chan struct{}) error {
 	}
 }
 
-// CloseCtx shuts down the vmservice host and releases its resources.
 func (s *System) CloseCtx(ctx context.Context) error {
 	s.cleanupMu.Lock()
 	defer s.cleanupMu.Unlock()
@@ -438,8 +403,7 @@ func (s *System) CloseCtx(ctx context.Context) error {
 		s.lifecycleMu.Unlock()
 		return nil
 	}
-	// Closing is irreversible, so the notification is published once and never withdrawn:
-	// a close that fails a rung still leaves admission shut.
+	// A failed cleanup must not reopen mutation admission.
 	if !s.closing {
 		s.closing = true
 		close(s.closingNotify)
@@ -530,8 +494,7 @@ func (s *System) CloseCtx(ctx context.Context) error {
 		s.finishWait(hcs.ErrAlreadyClosed)
 		s.waitCancel()
 	}
-	// A failed Quit is not an error once everything else is released: containerd skips its own
-	// cleanup on any stop error.
+	// containerd skips its own cleanup on stop errors; ignore failed Quit after release.
 	if closed && failures == 1 && quitErr != nil {
 		log.G(context.Background()).WithError(quitErr).Warn("OpenVMM host did not answer Quit, but it is terminated and released")
 		return nil
@@ -539,8 +502,7 @@ func (s *System) CloseCtx(ctx context.Context) error {
 	return closeErr
 }
 
-// WaitCtx blocks until the VM halts or its resources are released. The exit latch is set
-// once: a second call returns the same result without a second RPC.
+// Caller cancellation must not cancel the VM-wide wait shared by other callers.
 func (s *System) WaitCtx(ctx context.Context) error {
 	select {
 	case <-s.waitDone:
@@ -578,7 +540,6 @@ func (s *System) finishWait(err error) {
 	})
 }
 
-// ExitError reports why the VM stopped. It is local state set by the exit latch.
 func (s *System) ExitError() error {
 	select {
 	case <-s.waitDone:
@@ -591,14 +552,12 @@ func (s *System) ExitError() error {
 	return s.exitErr
 }
 
-// StartedTime is set once, on the successful start.
 func (s *System) StartedTime() time.Time {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
 	return s.startedTime
 }
 
-// StoppedTime is set once, when the exit latch fires.
 func (s *System) StoppedTime() time.Time {
 	s.waitMu.Lock()
 	defer s.waitMu.Unlock()
@@ -610,10 +569,6 @@ func (s *System) Save(context.Context, interface{}) error {
 	return s.notImplemented("Save")
 }
 
-// Modify translates a hot-plug SCSI add/remove to a vmservice ModifyResource call. Every
-// other resource path, and any config of the wrong type, is a named not-implemented error:
-// BuildModifyResourceRequest never returns a partial request beside an error, so this
-// method never issues an RPC for a request it could not fully translate.
 func (s *System) Modify(ctx context.Context, config interface{}) error {
 	opCtx, finish, err := s.beginOperation(ctx)
 	if err != nil {
@@ -653,9 +608,6 @@ func (s *System) Modify(ctx context.Context, config interface{}) error {
 	return nil
 }
 
-// Properties returns identity only. With no property types it answers the shim-assigned
-// runtime GUID and issues no RPC; with any type it refuses rather than inventing a
-// statistic vmservice does not expose.
 func (s *System) Properties(_ context.Context, types ...schema1.PropertyType) (*schema1.ContainerProperties, error) {
 	if len(types) != 0 {
 		return nil, fmt.Errorf("schema1 property type %q is not available on the %s backend for compute system %s: %w", string(types[0]), BackendName, s.id, errdefs.ErrNotImplemented)
@@ -666,8 +618,6 @@ func (s *System) Properties(_ context.Context, types ...schema1.PropertyType) (*
 	}, nil
 }
 
-// PropertiesV2 is deferred, not silently stubbed: vmservice reports only memory and
-// processor statistics and no VM GUID, and translating them has no consumer on this path.
 func (s *System) PropertiesV2(context.Context, ...hcsschema.PropertyType) (*hcsschema.Properties, error) {
 	return nil, s.notImplemented("PropertiesV2")
 }
@@ -701,12 +651,10 @@ func (s *System) FinalizeLiveMigration(context.Context, *hcsschema.MigrationFina
 	return s.notImplemented("FinalizeLiveMigration")
 }
 
-// MigrationNotifications returns a non-nil closed channel, so a range terminates.
 func (s *System) MigrationNotifications() <-chan hcsschema.OperationSystemMigrationNotificationInfo {
 	return s.migrationNotifications
 }
 
-// TransportBase returns the hybrid-vsock base this system handed to vmservice.
 func (s *System) TransportBase() string {
 	return s.transportBase
 }

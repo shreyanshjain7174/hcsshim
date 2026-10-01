@@ -26,11 +26,7 @@ var errUnknownNetworkAdapter = errors.New("the openvmm backend has no network ad
 
 var errNetworkBindMismatch = errors.New("the openvmm backend's network state does not match the bind it was asked to perform")
 
-// networkBinding is what System remembers about one bound NIC: the exact endpoint, port,
-// and switch a DIO NICConfig was built from, and the MAC address vmservice was told about,
-// so a remove or a rollback targets exactly the tuple the add created. An add that has
-// claimed a port but not yet committed the NIC records only endpointID and portID: that is
-// enough for the release worker to unbind, and too little to pass a remove's validation.
+// Partial tuples track ports for rollback before vmservice has accepted the NIC.
 type networkBinding struct {
 	endpointID       string
 	portID           guid.GUID
@@ -39,19 +35,12 @@ type networkBinding struct {
 	vmserviceRemoved bool
 }
 
-// isNetworkResourcePath reports whether path is shaped like resourcepaths.NetworkResourceFormat
-// (VirtualMachine/Devices/NetworkAdapters/...), without requiring the NIC id segment to be a
-// well-formed GUID. It routes a network-shaped path - malformed or not - to modifyNetwork for
-// the named-error verdict, and every other path to BuildModifyResourceRequest's not-implemented
-// arm.
+// Malformed NIC IDs must also receive the network-specific error.
 func isNetworkResourcePath(path string) bool {
 	segments := strings.SplitN(path, "/", 4)
 	return len(segments) >= 3 && segments[0] == "VirtualMachine" && segments[1] == "Devices" && segments[2] == "NetworkAdapters"
 }
 
-// parseNetworkResourcePath resolves a ModifySettingRequest.ResourcePath built from
-// resourcepaths.NetworkResourceFormat back to the NIC id. A wrong segment count, a wrong
-// segment name, and an id that is not a well-formed GUID are each a distinct named error.
 func parseNetworkResourcePath(path string) (guid.GUID, error) {
 	segments := strings.Split(path, "/")
 	if len(segments) != 4 || segments[0] != "VirtualMachine" || segments[1] != "Devices" || segments[2] != "NetworkAdapters" {
@@ -79,9 +68,6 @@ func parseEndpointGUID(value string) (guid.GUID, error) {
 	return guid.FromString(value)
 }
 
-// modifyNetwork dispatches a network-shaped ModifySettingRequest to its transaction. Every
-// path through the two transactions either fully commits a binding change or leaves the
-// prior state untouched: neither one stores a binding beside an error.
 func (s *System) modifyNetwork(ctx context.Context, req *hcsschema.ModifySettingRequest) error {
 	nicID, err := parseNetworkResourcePath(req.ResourcePath)
 	if err != nil {
@@ -100,11 +86,7 @@ func (s *System) modifyNetwork(ctx context.Context, req *hcsschema.ModifySetting
 	}
 }
 
-// modifyNetworkAdd binds an HNS switch port to the requested endpoint, validates what the
-// bind reported, and only then tells vmservice about the NIC. A failure at any step unbinds
-// the exact port the bind attempted; the binding is forgotten only once that unbind proves
-// the port released, so a failed rollback leaves the tuple for the close-time release
-// worker to retry rather than leaking an untracked HNS port.
+// Failed rollback must retain the tuple for close-time retry, not leak an untracked port.
 func (s *System) modifyNetworkAdd(ctx context.Context, req *hcsschema.ModifySettingRequest, nicID guid.GUID) error {
 	settings, ok := req.Settings.(*hcsschema.NetworkAdapter)
 	if !ok || settings == nil {
@@ -120,9 +102,7 @@ func (s *System) modifyNetworkAdd(ctx context.Context, req *hcsschema.ModifySett
 		return fmt.Errorf("network add at NIC %s has an empty MacAddress: %w", nicID, errInvalidNetworkAdapter)
 	}
 
-	// Admission happened before this add reached the transaction lock, and CloseCtx may
-	// have set closing while it waited behind the release worker. Claiming a port now
-	// would produce one nothing will ever release.
+	// Close may have finished releasing ports while this add waited for the transaction lock.
 	if !s.operationStillAllowed() {
 		return fmt.Errorf("compute system %s closed before the network add at NIC %s could bind: %w", s.id, nicID, hcs.ErrAlreadyClosed)
 	}
@@ -134,9 +114,7 @@ func (s *System) modifyNetworkAdd(ctx context.Context, req *hcsschema.ModifySett
 
 	bound, bindErr := s.binder.Bind(ctx, settings.EndpointId, nicID)
 	if bound.PortID != (guid.GUID{}) {
-		// The port exists from here on, whatever happens next: track enough to unbind it
-		// before anything can fail, and no more, so this is never mistaken for a NIC the
-		// VM was told about.
+		// Track the port before validation or RPC can fail, so rollback remains possible.
 		s.storeNetworkBinding(key, networkBinding{
 			endpointID: settings.EndpointId,
 			portID:     bound.PortID,
@@ -194,8 +172,7 @@ func (s *System) modifyNetworkAdd(ctx context.Context, req *hcsschema.ModifySett
 	return nil
 }
 
-// modifyNetworkRemove tells vmservice to drop the NIC before it releases the HNS port, so a
-// failure at either step retains the binding rather than losing track of a live resource.
+// Remove the VM NIC before unbinding its host port; failed cleanup must remain retryable.
 func (s *System) modifyNetworkRemove(ctx context.Context, req *hcsschema.ModifySettingRequest, nicID guid.GUID) error {
 	settings, ok := req.Settings.(*hcsschema.NetworkAdapter)
 	if !ok || settings == nil {
@@ -263,10 +240,6 @@ func (s *System) modifyNetworkRemove(ctx context.Context, req *hcsschema.ModifyS
 	return nil
 }
 
-// validateBoundEndpoint checks a bind result against what the caller requested: the same
-// endpoint identity, a well-formed switch id, and a MAC address that matches the requested
-// one up to separator and case. It returns the parsed switch id only when every check
-// passes.
 func validateBoundEndpoint(requestedEndpointID, requestedMAC string, bound BoundEndpoint) (guid.GUID, error) {
 	requestedID, err := parseEndpointGUID(requestedEndpointID)
 	if err != nil {
@@ -296,9 +269,6 @@ func (s *System) rollbackNetworkBind(ctx context.Context, endpointID string, por
 	return s.binder.Unbind(ctx, endpointID, portID, nicID)
 }
 
-// reserveNetworkBinding claims key for an in-flight add, so two concurrent adds for the
-// same NIC id cannot both pass the duplicate check. It reports false if key is already
-// bound or reserved.
 func (s *System) reserveNetworkBinding(key string) bool {
 	s.networkMu.Lock()
 	defer s.networkMu.Unlock()

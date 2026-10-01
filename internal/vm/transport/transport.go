@@ -1,15 +1,6 @@
 //go:build windows && (lcow || wcow)
 
-/*
-Package transport gives the shim one guest-transport factory that serves both the static
-guest ports the LCOW cold path binds (entropy, the Linux log channel, and the GCS service)
-and the dynamic process-IO ports the GCS bridge allocates, on either backend.
-
-Two shapes exist. On HCS the host side is an AF_HYPERV socket keyed by the VM GUID and a
-service GUID, and no filesystem object is created. On OpenVMM the host side is an AF_UNIX
-listener whose pathname is derived from a single configured base, exactly as OpenVMM's
-support/hybrid_vsock/src/lib.rs derives it.
-*/
+/* Package transport preserves HCS socket identities and OpenVMM's hybrid-vsock path protocol. */
 package transport
 
 import (
@@ -23,14 +14,11 @@ import (
 	"github.com/Microsoft/go-winio/pkg/guid"
 )
 
-// Factory produces host-side listeners for guest ports on one backend. One factory belongs
-// to one VM, and [Factory.Close] is the single cleanup point for everything it created.
+// A factory belongs to one VM and retains ownership until cleanup succeeds.
 type Factory interface {
-	// ListenService binds the host side of a guest service GUID, such as the GCS service
-	// ID the guest dials.
+	// Service GUIDs identify guest-dialed services, including GCS.
 	ListenService(serviceID guid.GUID) (net.Listener, error)
-	// ListenPort binds the host side of a numeric guest vsock port: entropy is 1, the
-	// Linux log channel is 109, and the GCS bridge allocates the dynamic IO ports.
+	// Guest ABI ports: entropy 1, Linux logs 109; GCS allocates process-IO ports.
 	ListenPort(port uint32) (net.Listener, error)
 	// Paths returns currently tracked filesystem socket paths in creation order.
 	Paths() []string
@@ -39,15 +27,13 @@ type Factory interface {
 }
 
 var (
-	// ErrDuplicateBind reports a second listen for a guest port or service ID this
-	// factory has bound and whose listener is still open. Two live listeners for one
-	// guest port is never the intent; a re-arm after the first was closed is legal.
+	// Live migration rollback must be able to rebind after the first listener closes.
 	ErrDuplicateBind = errors.New("a listener is already bound for this guest port or service id")
 	// ErrClosed reports a listen attempted after the factory was closed.
 	ErrClosed = errors.New("the transport factory is closed")
 )
 
-// entry is one bind this factory owns. path is empty for hvsock.
+// HCS hvsock entries have no filesystem path.
 type entry struct {
 	key      string
 	path     string
@@ -59,10 +45,7 @@ type entry struct {
 	pathRemoved    bool
 }
 
-// trackedListener releases the bind reservation when the consumer closes the listener.
-// Two simultaneous listeners on one guest port stay impossible, while a legitimate re-arm
-// stays possible: the live-migration source rollback rebinds the log and GCS listeners
-// after the blackout consumed the first pair.
+// Live migration source rollback rebinds log and GCS listeners after blackout.
 type trackedListener struct {
 	net.Listener
 	entry *entry
@@ -107,9 +90,6 @@ func (e *entry) done() bool {
 	return e.listenerClosed && e.pathRemoved
 }
 
-// bookkeeping is the shared reservation, ordering, and exactly-once removal state. Both
-// factories embed it so duplicate detection, ordering, and idempotent close behave
-// identically on either backend.
 type bookkeeping struct {
 	mu       sync.Mutex
 	closed   bool
@@ -119,8 +99,7 @@ type bookkeeping struct {
 	settled  chan struct{}
 }
 
-// reserve claims a bind key before any backend work happens, so a duplicate never reaches
-// the backend and a failed bind can be rolled back with release.
+// Reserve before backend work so concurrent duplicate binds cannot race.
 func (b *bookkeeping) reserve(key string) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -139,7 +118,6 @@ func (b *bookkeeping) reserve(key string) error {
 	return nil
 }
 
-// release undoes a reservation whose bind failed.
 func (b *bookkeeping) release(key string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -154,8 +132,6 @@ func (b *bookkeeping) settleLocked() {
 	}
 }
 
-// commit records a successful bind in creation order and returns the listener the caller
-// sees, which releases the reservation when it is closed.
 func (b *bookkeeping) commit(key, path string, l net.Listener, owner *safefile.DeleteHandle) (net.Listener, error) {
 	e := &entry{key: key, path: path, listener: l, owner: owner}
 	b.mu.Lock()
@@ -190,7 +166,6 @@ func (b *bookkeeping) complete(completed *entry) {
 	}
 }
 
-// paths reports the filesystem paths in creation order.
 func (b *bookkeeping) paths() []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -205,7 +180,6 @@ func (b *bookkeeping) paths() []string {
 	return out
 }
 
-// close retries failed cleanup and removes entries after successful cleanup.
 func (b *bookkeeping) close() error {
 	b.mu.Lock()
 	b.closed = true

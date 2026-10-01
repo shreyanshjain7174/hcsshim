@@ -26,13 +26,12 @@ const (
 	hybridVsockBaseLimit       = afUnixPathLimit - len(hybridVsockWidestSuffix)
 	hybridVsockGUIDSuffixBytes = 1 + 36
 	hybridVsockBaseWarn        = afUnixPathLimit - hybridVsockGUIDSuffixBytes
-	// perVMSuffixBytes is the "-" plus 8 hex digits ForVM adds to every socket path.
+	// ForVM adds a hyphen and eight hex digits.
 	perVMSuffixBytes = 9
 )
 
 var errConfigSource = errors.New("the openvmm backend configuration source is unusable")
 
-// Config identifies the OpenVMM process and its host-side socket paths.
 type Config struct {
 	OpenVMMBinaryPath string `json:"openvmmBinaryPath"`
 	VMServiceSocket   string `json:"vmServiceSocket"`
@@ -87,7 +86,6 @@ func LoadConfig() (*Config, error) {
 	return config, nil
 }
 
-// Validate checks paths and logs non-fatal compatibility warnings.
 func (c *Config) Validate() error {
 	for _, field := range []struct{ name, value string }{
 		{"openvmmBinaryPath", c.OpenVMMBinaryPath},
@@ -125,8 +123,6 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-// ForVM returns a copy whose socket paths are unique to id, so shims on one host never
-// share a pathname.
 func (c *Config) ForVM(id string) *Config {
 	sum := sha256.Sum256([]byte(id))
 	tag := "-" + hex.EncodeToString(sum[:4])
