@@ -20,7 +20,7 @@ func socketClaimPath(socketPath string) string { return socketPath + socketClaim
 
 var acquireSocketClaim = acquireHostSocketClaim
 
-// A file rather than a named mutex, so the cross-process holder is visible on disk.
+// A file rather than a named mutex, so the cross-process claim is visible on disk.
 // CREATE_NEW is atomic; DELETE_ON_CLOSE removes the name when the last handle closes, even on crash.
 type hostSocketClaim struct {
 	path string

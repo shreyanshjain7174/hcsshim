@@ -27,7 +27,7 @@ type Factory interface {
 }
 
 var (
-	// ErrDuplicateBind reports a second listen for a key whose listener is still open.
+	// ErrDuplicateBind reports a second listen for a key whose earlier bind is not yet closed and unlinked.
 	ErrDuplicateBind = errors.New("a listener is already bound for this guest port or service id")
 	// ErrClosed reports a listen attempted after the factory was closed.
 	ErrClosed = errors.New("the transport factory is closed")

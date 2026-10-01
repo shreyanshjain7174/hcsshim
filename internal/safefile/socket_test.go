@@ -51,7 +51,6 @@ func TestClaimSocketPathPreservesSocketOnInconclusiveProbe(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	listener.SetUnlinkOnClose(false)
-	t.Cleanup(func() { _ = listener.Close() })
 	if err := listener.Close(); err != nil {
 		t.Fatalf("close listener: %v", err)
 	}
