@@ -55,7 +55,7 @@ var vsockTemplate = guid.GUID{
 type hybridFactory struct {
 	base string
 	book bookkeeping
-	// Probe failures alone do not establish that a socket is stale.
+	// Only an absent or refused answer proves staleness; other errors are inconclusive.
 	probeDial func(ctx context.Context, network, address string) (net.Conn, error)
 }
 

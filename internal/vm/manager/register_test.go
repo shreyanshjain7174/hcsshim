@@ -166,6 +166,7 @@ func TestNewDirectCreateRPCFailureReturnsSerialCloseError(t *testing.T) {
 		TransportBase: config.HybridVsockBase,
 	})
 	opts := nativeCreateOptions(t)
+	t.Cleanup(func() { _ = os.Remove(config.ForVM(opts.ID).SerialSocket) })
 	opts.SandboxSpec.Annotations[iannotations.UVMConsolePipe] = `\\.\pipe\console`
 
 	result, err := create(context.Background(), opts)

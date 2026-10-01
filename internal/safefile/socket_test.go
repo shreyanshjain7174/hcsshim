@@ -44,6 +44,36 @@ func TestClaimSocketPathRefusesLivePeer(t *testing.T) {
 	}
 }
 
+func TestClaimSocketPathPreservesSocketOnInconclusiveProbe(t *testing.T) {
+	path := shortSocketPath(t)
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	listener.SetUnlinkOnClose(false)
+	t.Cleanup(func() { _ = listener.Close() })
+	if err := listener.Close(); err != nil {
+		t.Fatalf("close listener: %v", err)
+	}
+
+	errInconclusive := errors.New("socket probe inconclusive")
+	err = ClaimSocketPath(context.Background(), path, ClaimSocketPathOptions{
+		ProbeDial: func(context.Context, string, string) (net.Conn, error) {
+			return nil, context.DeadlineExceeded
+		},
+		ProbeBudget:       2 * time.Second,
+		InUseError:        errors.New("socket path in use"),
+		InconclusiveError: errInconclusive,
+		PathDescription:   "test socket path",
+	})
+	if !errors.Is(err, errInconclusive) {
+		t.Errorf("ClaimSocketPath error = %v, want %v", err, errInconclusive)
+	}
+	if _, statErr := os.Lstat(path); statErr != nil {
+		t.Fatalf("socket path was not preserved after an inconclusive probe: %v", statErr)
+	}
+}
+
 func TestClaimSocketPathPinsSocketBeforeProbe(t *testing.T) {
 	path := shortSocketPath(t)
 	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})

@@ -220,7 +220,7 @@ type openvmmLauncher struct {
 	poll      time.Duration
 
 	mu sync.Mutex
-	// Serializes socket cleanup to avoid sharing violations; never held with mu.
+	// Serializes whole Terminate ladders; acquire before mu, never while holding mu.
 	terminateMu sync.Mutex
 	child       ownedChild
 	childID     string

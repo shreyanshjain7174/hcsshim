@@ -24,6 +24,7 @@ func dialVMService(ctx context.Context, socketPath string) (vmservice.VMClient, 
 	}
 	connection, err := grpc.NewClient(vmServiceDialTarget,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		// Use gRPC's per-dial ctx; capturing the outer ctx would bound every reconnect by creation.
 		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
 			var dialer net.Dialer
 			return dialer.DialContext(ctx, "unix", socketPath)
