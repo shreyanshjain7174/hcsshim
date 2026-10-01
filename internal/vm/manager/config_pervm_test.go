@@ -47,17 +47,17 @@ func TestValidateReservesPerVMSuffix(t *testing.T) {
 		HybridVsockBase:   `C:\hv`,
 		SerialSocket:      `C:\com1.sock`,
 	}
-	if _, err := c.Validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		t.Fatalf("short paths rejected: %v", err)
 	}
 	// Fits the raw AF_UNIX limit but not once the per-VM suffix is added.
 	c.VMServiceSocket = `C:\` + strings.Repeat("a", afUnixPathLimit-len(`C:\`)-perVMSuffixBytes+1)
-	if _, err := c.Validate(); !errors.Is(err, errConfigSource) {
+	if err := c.Validate(); !errors.Is(err, errConfigSource) {
 		t.Fatalf("over-budget socket template accepted: %v", err)
 	}
 	c.VMServiceSocket = `C:\vm.sock`
 	c.HybridVsockBase = `C:\` + strings.Repeat("h", hybridVsockBaseLimit-len(`C:\`)-perVMSuffixBytes+1)
-	if _, err := c.Validate(); !errors.Is(err, errConfigSource) {
+	if err := c.Validate(); !errors.Is(err, errConfigSource) {
 		t.Fatalf("over-budget hybrid base template accepted: %v", err)
 	}
 }
@@ -74,7 +74,7 @@ func TestValidateAcceptsTemplatesExactlyAtTheBudget(t *testing.T) {
 		HybridVsockBase:   `C:\` + strings.Repeat("h", hybridVsockBaseLimit-len(`C:\`)-perVMSuffixBytes),
 		SerialSocket:      `C:\com1.sock`,
 	}
-	if _, err := c.Validate(); err != nil {
+	if err := c.Validate(); err != nil {
 		t.Fatalf("templates exactly at the budget rejected: %v", err)
 	}
 	// Accepting the template is only correct if the derived path really fits.

@@ -4,6 +4,7 @@ package manager
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/Microsoft/hcsshim/internal/log"
 )
 
 const configFileName = "openvmm-backend.json"
@@ -65,31 +68,27 @@ func LoadConfig() (*Config, error) {
 	if err := decoder.Decode(new(json.RawMessage)); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("the openvmm backend configuration source %s must hold exactly one JSON object and nothing after it: %w", path, errConfigSource)
 	}
-	if missing := config.missingFields(); len(missing) != 0 {
+	var missing []string
+	if config.OpenVMMBinaryPath == "" {
+		missing = append(missing, "openvmmBinaryPath")
+	}
+	if config.VMServiceSocket == "" {
+		missing = append(missing, "vmServiceSocket")
+	}
+	if config.HybridVsockBase == "" {
+		missing = append(missing, "hybridVsockBase")
+	}
+	if config.SerialSocket == "" {
+		missing = append(missing, "serialSocket")
+	}
+	if len(missing) != 0 {
 		return nil, fmt.Errorf("the openvmm backend configuration source %s is missing required field(s) %s: %w", path, strings.Join(missing, ", "), errConfigSource)
 	}
 	return config, nil
 }
 
-func (c *Config) missingFields() []string {
-	var missing []string
-	if c.OpenVMMBinaryPath == "" {
-		missing = append(missing, "openvmmBinaryPath")
-	}
-	if c.VMServiceSocket == "" {
-		missing = append(missing, "vmServiceSocket")
-	}
-	if c.HybridVsockBase == "" {
-		missing = append(missing, "hybridVsockBase")
-	}
-	if c.SerialSocket == "" {
-		missing = append(missing, "serialSocket")
-	}
-	return missing
-}
-
-// Validate checks paths and returns non-fatal compatibility warnings separately.
-func (c *Config) Validate() (warnings []string, err error) {
+// Validate checks paths and logs non-fatal compatibility warnings.
+func (c *Config) Validate() error {
 	for _, field := range []struct{ name, value string }{
 		{"openvmmBinaryPath", c.OpenVMMBinaryPath},
 		{"vmServiceSocket", c.VMServiceSocket},
@@ -97,33 +96,33 @@ func (c *Config) Validate() (warnings []string, err error) {
 		{"serialSocket", c.SerialSocket},
 	} {
 		if !filepath.IsAbs(field.value) {
-			return warnings, fmt.Errorf("%s in %s must be an absolute path, got %q: %w", field.name, configFileName, field.value, errConfigSource)
+			return fmt.Errorf("%s in %s must be an absolute path, got %q: %w", field.name, configFileName, field.value, errConfigSource)
 		}
 	}
 	if _, statErr := os.Stat(c.OpenVMMBinaryPath); statErr != nil {
-		return warnings, fmt.Errorf("openvmmBinaryPath %q in %s does not exist: %w (%v)", c.OpenVMMBinaryPath, configFileName, errConfigSource, statErr)
+		return fmt.Errorf("openvmmBinaryPath %q in %s does not exist: %w (%v)", c.OpenVMMBinaryPath, configFileName, errConfigSource, statErr)
 	}
 	if strings.Contains(c.VMServiceSocket, ",") {
-		return warnings, fmt.Errorf("vmServiceSocket in %s contains a reserved comma in OpenVMM's --rpc value grammar: %w", configFileName, errConfigSource)
+		return fmt.Errorf("vmServiceSocket in %s contains a reserved comma in OpenVMM's --rpc value grammar: %w", configFileName, errConfigSource)
 	}
 	if strings.Contains(c.VMServiceSocket, "=") {
-		return warnings, fmt.Errorf("vmServiceSocket in %s contains a reserved equals sign in OpenVMM's --rpc value grammar: %w", configFileName, errConfigSource)
+		return fmt.Errorf("vmServiceSocket in %s contains a reserved equals sign in OpenVMM's --rpc value grammar: %w", configFileName, errConfigSource)
 	}
 	for _, field := range []struct{ name, value string }{
 		{"vmServiceSocket", c.VMServiceSocket},
 		{"serialSocket", c.SerialSocket},
 	} {
 		if n := len(field.value) + perVMSuffixBytes; n > afUnixPathLimit {
-			return warnings, fmt.Errorf("%s in %s is %d UTF-8 bytes with its %d-byte per-VM suffix, over the AF_UNIX limit of %d: %w", field.name, configFileName, n, perVMSuffixBytes, afUnixPathLimit, errConfigSource)
+			return fmt.Errorf("%s in %s is %d UTF-8 bytes with its %d-byte per-VM suffix, over the AF_UNIX limit of %d: %w", field.name, configFileName, n, perVMSuffixBytes, afUnixPathLimit, errConfigSource)
 		}
 	}
 	if n := len(c.HybridVsockBase) + perVMSuffixBytes; n > hybridVsockBaseLimit {
-		return warnings, fmt.Errorf("hybridVsockBase in %s is %d UTF-8 bytes with its %d-byte per-VM suffix, over the limit of %d, which is the AF_UNIX limit of %d less the %d bytes of the widest %q suffix: %w", configFileName, n, perVMSuffixBytes, hybridVsockBaseLimit, afUnixPathLimit, len(hybridVsockWidestSuffix), hybridVsockWidestSuffix, errConfigSource)
+		return fmt.Errorf("hybridVsockBase in %s is %d UTF-8 bytes with its %d-byte per-VM suffix, over the limit of %d, which is the AF_UNIX limit of %d less the %d bytes of the widest %q suffix: %w", configFileName, n, perVMSuffixBytes, hybridVsockBaseLimit, afUnixPathLimit, len(hybridVsockWidestSuffix), hybridVsockWidestSuffix, errConfigSource)
 	}
 	if n := len(c.HybridVsockBase) + perVMSuffixBytes; n > hybridVsockBaseWarn {
-		warnings = append(warnings, fmt.Sprintf("hybridVsockBase is %d UTF-8 bytes with its per-VM suffix; above %d bytes OpenVMM's %d-character GUID fallback suffix no longer fits inside the AF_UNIX limit of %d", n, hybridVsockBaseWarn, hybridVsockGUIDSuffixBytes-1, afUnixPathLimit))
+		log.G(context.Background()).WithField("config", configFileName).Warnf("hybridVsockBase is %d UTF-8 bytes with its per-VM suffix; above %d bytes OpenVMM's %d-character GUID fallback suffix no longer fits inside the AF_UNIX limit of %d", n, hybridVsockBaseWarn, hybridVsockGUIDSuffixBytes-1, afUnixPathLimit)
 	}
-	return warnings, nil
+	return nil
 }
 
 // ForVM returns a copy whose socket paths are unique to id, so shims on one host never

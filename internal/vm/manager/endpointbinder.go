@@ -54,20 +54,17 @@ func (hcnEndpointPortBinder) Bind(_ context.Context, endpointID string, nicID gu
 	if err != nil {
 		return BoundEndpoint{PortID: portID}, fmt.Errorf("failed to resolve switch for endpoint %s on network %s: %w", endpointID, endpoint.HostComputeNetwork, err)
 	}
+	switchID := network.SwitchGuid
+	if switchID == "" {
+		switchID = endpoint.HostComputeNetwork
+	}
 
 	return BoundEndpoint{
 		PortID:     portID,
 		EndpointID: endpoint.Id,
-		SwitchID:   endpointSwitchID(endpoint, network),
+		SwitchID:   switchID,
 		MacAddress: endpoint.MacAddress,
 	}, nil
-}
-
-func endpointSwitchID(endpoint *hcn.HostComputeEndpoint, network *hns.HNSNetwork) string {
-	if network.SwitchGuid != "" {
-		return network.SwitchGuid
-	}
-	return endpoint.HostComputeNetwork
 }
 
 func (hcnEndpointPortBinder) Unbind(_ context.Context, endpointID string, portID guid.GUID, nicID guid.GUID) error {

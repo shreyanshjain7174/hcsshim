@@ -51,8 +51,7 @@ type serialRelay struct {
 
 	// owner holds the exact file this relay's listener created and denies delete sharing
 	// until cleanup marks that handle for deletion.
-	owner       *safefile.DeleteHandle
-	removeOwner func(*safefile.DeleteHandle) error
+	owner *safefile.DeleteHandle
 
 	// done is closed when the accept/copy goroutine has returned, so Close can prove no
 	// goroutine outlives the compute system rather than assume it.
@@ -206,11 +205,7 @@ func (r *serialRelay) releasePath() error {
 	if r.owner == nil {
 		return fmt.Errorf("cannot remove the COM1 serial socket %s: this relay never captured ownership", r.path)
 	}
-	remove := r.owner.Remove
-	if r.removeOwner != nil {
-		remove = func() error { return r.removeOwner(r.owner) }
-	}
-	if err := remove(); err != nil {
+	if err := r.owner.Remove(); err != nil {
 		return err
 	}
 	r.pathReleased = true

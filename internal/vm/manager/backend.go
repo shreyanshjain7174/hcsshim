@@ -50,10 +50,6 @@ type VMLauncher interface {
 	Terminate(ctx context.Context) error
 }
 
-// DialFunc produces a vmservice client over the path Launch returned, together with the
-// closer that releases the connection.
-type DialFunc func(ctx context.Context, socketPath string) (vmservice.VMClient, io.Closer, error)
-
 // Deps are the request-native backend's constructor inputs.
 type Deps struct {
 	// Launcher spawns the VM host process and reports the socket to dial.
@@ -61,7 +57,7 @@ type Deps struct {
 	// NewLauncher builds the launcher for one VM's derived config when Launcher is nil.
 	NewLauncher func(*Config) VMLauncher
 	// Dial builds the vmservice client from that socket path.
-	Dial DialFunc
+	Dial func(ctx context.Context, socketPath string) (vmservice.VMClient, io.Closer, error)
 	// TransportBase is the hybrid-vsock base the request's hvsocket path must equal. The
 	// direct create path overwrites it with the per-VM base derived from the VM ID, so a
 	// value set on the Deps passed to newDirectCreate is not used there.

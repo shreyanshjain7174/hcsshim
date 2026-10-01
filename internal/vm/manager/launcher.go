@@ -93,12 +93,6 @@ type ownedChild interface {
 	Close() error
 }
 
-// launchArgs is the whole command line contract, in one place. Two tokens: the flag and its
-// value. The value grammar and explicit gRPC transport follow OpenVMM's --rpc option.
-func launchArgs(socketPath string) []string {
-	return []string{"--rpc", "path=" + socketPath + ",transport=grpc"}
-}
-
 // startProcess is the owned-handle spawn seam. Tests replace it to assert the executable
 // and the exact argv without introducing a second configuration source.
 var startProcess = func(exe string, args []string) (ownedChild, error) {
@@ -311,7 +305,7 @@ func (l *openvmmLauncher) Launch(ctx context.Context, id string) (string, error)
 		}
 	}
 
-	child, err := startProcess(l.config.OpenVMMBinaryPath, launchArgs(socketPath))
+	child, err := startProcess(l.config.OpenVMMBinaryPath, []string{"--rpc", "path=" + socketPath + ",transport=grpc"})
 	if err != nil {
 		claimErr := l.abandonClaim(ctx, claim)
 		l.release()

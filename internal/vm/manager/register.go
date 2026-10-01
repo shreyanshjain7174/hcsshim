@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	controllervm "github.com/Microsoft/hcsshim/internal/controller/vm"
-	"github.com/Microsoft/hcsshim/internal/log"
 )
 
 // NewDirectCreate loads the OpenVMM configuration and constructs the direct VM creator.
@@ -16,11 +15,7 @@ func NewDirectCreate() (controllervm.DirectCreateFunc, error) {
 	if err != nil {
 		return nil, fmt.Errorf("the openvmm backend configuration is unusable: %w", err)
 	}
-	warnings, err := config.Validate()
-	for _, warning := range warnings {
-		log.G(context.Background()).WithField("config", configFileName).Warn(warning)
-	}
-	if err != nil {
+	if err := config.Validate(); err != nil {
 		return nil, fmt.Errorf("the openvmm backend configuration is unusable: %w", err)
 	}
 	return newDirectCreate(config, Deps{

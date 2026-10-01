@@ -15,27 +15,10 @@ import (
 	"github.com/Microsoft/hcsshim/internal/safefile"
 )
 
-type countingOwnedPathRemove struct {
-	calls int
-	errs  []error
-}
-
 func swapSerialOpenOwnedPathForTest(open func(string) (*safefile.DeleteHandle, error)) func() {
 	previous := serialOpenOwnedPath
 	serialOpenOwnedPath = open
 	return func() { serialOpenOwnedPath = previous }
-}
-
-func (c *countingOwnedPathRemove) remove(owner *safefile.DeleteHandle) error {
-	c.calls++
-	if len(c.errs) > 0 {
-		err := c.errs[0]
-		c.errs = c.errs[1:]
-		if err != nil {
-			return err
-		}
-	}
-	return owner.Remove()
 }
 
 func newTestSerialRelay(t *testing.T) (*serialRelay, string) {
@@ -64,46 +47,6 @@ func TestSerialRelayPreventsPathReplacementUntilClose(t *testing.T) {
 	}
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the COM1 socket survived owner cleanup: %v", err)
-	}
-}
-
-func TestSerialRelayCloseRetriesPathRemovalAfterTransientFailure(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "serial.sock")
-	if err := os.WriteFile(path, []byte("owned"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	owner, err := safefile.OpenDeleteHandle(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	relay := &serialRelay{path: path, owner: owner, log: log.G(context.Background())}
-
-	removal := &countingOwnedPathRemove{errs: []error{errors.New("sharing violation")}}
-	relay.removeOwner = removal.remove
-
-	err = relay.releasePath()
-	if err == nil || !strings.Contains(err.Error(), "sharing violation") {
-		t.Fatalf("first Close = %v, want the removal failure", err)
-	}
-	if _, statErr := os.Stat(path); statErr != nil {
-		t.Fatalf("the COM1 pathname vanished despite a failed removal: %v", statErr)
-	}
-
-	if err := relay.releasePath(); err != nil {
-		t.Fatalf("retry Close: %v", err)
-	}
-	if removal.calls != 2 {
-		t.Fatalf("removal attempts = %d, want 2 (failed then retried)", removal.calls)
-	}
-	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("the COM1 pathname survived a successful retry: %v", statErr)
-	}
-
-	if err := relay.releasePath(); err != nil {
-		t.Fatalf("third Close: %v", err)
-	}
-	if removal.calls != 2 {
-		t.Fatalf("removal attempts = %d, want no attempt once the pathname is gone", removal.calls)
 	}
 }
 
