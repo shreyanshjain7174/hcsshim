@@ -35,6 +35,7 @@ type fakeModifyVMClient struct {
 	mu            sync.Mutex
 	totalCalls    int
 	createCalls   []*vmservice.CreateVMRequest
+	createHook    func()
 	createErr     error
 	modifyCalls   []*vmservice.ModifyResourceRequest
 	modifyErrs    []error
@@ -89,6 +90,9 @@ func (f *fakeModifyVMClient) calls() []*vmservice.ModifyResourceRequest {
 }
 
 func (f *fakeModifyVMClient) CreateVM(_ context.Context, in *vmservice.CreateVMRequest, _ ...grpc.CallOption) (*emptypb.Empty, error) {
+	if f.createHook != nil {
+		f.createHook()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.totalCalls++

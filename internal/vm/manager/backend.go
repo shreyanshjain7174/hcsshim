@@ -113,11 +113,12 @@ func (b *backend) CreateFromRequest(ctx context.Context, id string, request *vms
 	}
 
 	if _, err := client.CreateVM(ctx, request); err != nil {
+		var serialErr error
 		if serial != nil {
-			_ = serial.Close()
+			serialErr = serial.Close()
 		}
-		_ = conn.Close()
-		return nil, guid.GUID{}, fmt.Errorf("failed to create compute system %s: %w", id, errors.Join(err, b.terminateLauncher(ctx)))
+		connErr := conn.Close()
+		return nil, guid.GUID{}, fmt.Errorf("failed to create compute system %s: %w", id, errors.Join(err, serialErr, connErr, b.terminateLauncher(ctx)))
 	}
 
 	return newSystem(id, runtimeID, b.deps.TransportBase, client, conn, b.deps.Launcher, serial, nil), runtimeID, nil

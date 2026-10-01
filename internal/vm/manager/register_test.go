@@ -10,12 +10,14 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	runhcsoptions "github.com/Microsoft/hcsshim/cmd/containerd-shim-runhcs-v1/options"
 	iannotations "github.com/Microsoft/hcsshim/internal/annotations"
 	controllervm "github.com/Microsoft/hcsshim/internal/controller/vm"
+	"github.com/Microsoft/hcsshim/internal/safefile"
 	"github.com/Microsoft/hcsshim/internal/vmservice"
 	vmsandbox "github.com/Microsoft/hcsshim/sandbox-spec/vm/v2"
 )
@@ -130,6 +132,45 @@ func TestNewDirectCreateRPCFailureClosesSerialListener(t *testing.T) {
 	}
 	if _, statErr := os.Stat(config.SerialSocket); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("serial socket survived RPC failure: %v", statErr)
+	}
+}
+
+func TestNewDirectCreateRPCFailureReturnsSerialCloseError(t *testing.T) {
+	config := nativeBuilderConfig()
+	config.SerialSocket = shortSerialSocketPath(t)
+	launcher := &fakeDirectLauncher{socketPath: config.VMServiceSocket}
+	connection := &recordingCloser{}
+	createErr := errors.New("create failed")
+	var owner *safefile.DeleteHandle
+	t.Cleanup(swapSerialOpenOwnedPathForTest(func(path string) (*safefile.DeleteHandle, error) {
+		var err error
+		owner, err = safefile.OpenDeleteHandle(path)
+		return owner, err
+	}))
+	client := &fakeModifyVMClient{
+		createErr: createErr,
+		createHook: func() {
+			if owner == nil {
+				t.Fatal("CreateVM called before the serial relay captured its socket")
+			}
+			if err := owner.Close(); err != nil {
+				t.Fatalf("closing the serial ownership handle: %v", err)
+			}
+		},
+	}
+	create := newDirectCreate(config, Deps{
+		Launcher: launcher,
+		Dial: func(context.Context, string) (vmservice.VMClient, io.Closer, error) {
+			return client, connection, nil
+		},
+		TransportBase: config.HybridVsockBase,
+	})
+	opts := nativeCreateOptions(t)
+	opts.SandboxSpec.Annotations[iannotations.UVMConsolePipe] = `\\.\pipe\console`
+
+	result, err := create(context.Background(), opts)
+	if result != nil || !errors.Is(err, createErr) || !strings.Contains(err.Error(), "no ownership handle") {
+		t.Fatalf("result=%+v error=%v, want nil result wrapping the CreateVM and serial-close failures", result, err)
 	}
 }
 

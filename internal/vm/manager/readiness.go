@@ -45,13 +45,12 @@ func waitVMServiceReady(ctx context.Context, dial readinessDial, socketPath stri
 		owner, err := safefile.OpenDeleteHandle(socketPath)
 		if err == nil {
 			mode, modeErr := owner.Mode()
-			if modeErr != nil || mode&os.ModeSocket == 0 {
+			if modeErr != nil {
 				_ = owner.Close()
-				if modeErr != nil {
-					lastDialErr = modeErr
-				} else {
-					lastDialErr = errVMServiceSocketNotASocket
-				}
+				lastDialErr = modeErr
+			} else if mode&os.ModeSocket == 0 {
+				_ = owner.Close()
+				return nil, fmt.Errorf("the VM service at %s cannot become ready: %w", socketPath, errVMServiceSocketNotASocket)
 			} else {
 				connection, dialErr := dial(ctx, "unix", socketPath)
 				if dialErr == nil {
