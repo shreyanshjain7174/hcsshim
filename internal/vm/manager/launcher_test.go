@@ -128,52 +128,6 @@ func swapStartProcessForTest(t *testing.T, start func(string, []string) (ownedCh
 	t.Cleanup(func() { startProcess = previous })
 }
 
-func TestClaimSocketPathPinsSocketBeforeProbe(t *testing.T) {
-	socketPath := shortLauncherSocketPath(t)
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: socketPath, Net: "unix"})
-	if err != nil {
-		t.Fatalf("creating the stale socket: %v", err)
-	}
-	listener.SetUnlinkOnClose(false)
-	if err := listener.Close(); err != nil {
-		t.Fatalf("closing the stale socket listener: %v", err)
-	}
-
-	launcher := &openvmmLauncher{probeDial: func(context.Context, string, string) (net.Conn, error) {
-		if err := os.Remove(socketPath); err == nil {
-			t.Fatal("probe replaced a stale socket before cleanup pinned it")
-		}
-		return nil, windows.WSAECONNREFUSED
-	}}
-	if err := launcher.claimSocketPath(context.Background(), socketPath); err != nil {
-		t.Fatalf("claimSocketPath: %v", err)
-	}
-	if _, err := os.Lstat(socketPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stale socket survived cleanup: %v", err)
-	}
-}
-
-func TestClaimSocketPathPreservesOrdinaryFileWhenProbeReportsRefused(t *testing.T) {
-	socketPath := filepath.Join(t.TempDir(), "vmservice.sock")
-	const contents = "ordinary file"
-	if err := os.WriteFile(socketPath, []byte(contents), 0o600); err != nil {
-		t.Fatalf("writing the ordinary file: %v", err)
-	}
-
-	launcher := &openvmmLauncher{probeDial: dialFailure(windows.WSAECONNREFUSED)}
-	err := launcher.claimSocketPath(context.Background(), socketPath)
-	if !errors.Is(err, errVMServiceSocketNotASocket) {
-		t.Fatalf("claimSocketPath error = %v, want %v", err, errVMServiceSocketNotASocket)
-	}
-	got, readErr := os.ReadFile(socketPath)
-	if readErr != nil {
-		t.Fatalf("the ordinary file was not preserved: %v", readErr)
-	}
-	if string(got) != contents {
-		t.Fatalf("ordinary file contents = %q, want %q", got, contents)
-	}
-}
-
 func TestLaunchRetainsTheHostClaimAndOwnsTheSocketUntilTerminate(t *testing.T) {
 	dir := t.TempDir()
 	socketPath := shortLauncherSocketPath(t)

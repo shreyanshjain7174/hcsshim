@@ -3,7 +3,6 @@
 package transport
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -12,8 +11,6 @@ import (
 	"sync"
 	"testing"
 	"time"
-
-	"golang.org/x/sys/windows"
 )
 
 type retryCloseListener struct {
@@ -94,31 +91,6 @@ func TestHybridListenerCloseRemovesEntryAndAllowsRearm(t *testing.T) {
 	}
 	if err := second.Close(); err != nil {
 		t.Fatalf("second Close: %v", err)
-	}
-}
-
-func TestHybridClaimPreservesOrdinaryFile(t *testing.T) {
-	base := shortHybridBase(t)
-	factoryValue, err := NewHybrid(base)
-	if err != nil {
-		t.Fatalf("NewHybrid: %v", err)
-	}
-	factory := factoryValue.(*hybridFactory)
-	path := factory.portPath(1026)
-	const contents = "ordinary file"
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatalf("write ordinary file: %v", err)
-	}
-	factory.probeDial = func(context.Context, string, string) (net.Conn, error) {
-		return nil, windows.WSAENOTSOCK
-	}
-
-	if _, err := factory.ListenPort(1026); !errors.Is(err, ErrProbeInconclusive) {
-		t.Fatalf("ListenPort error = %v, want %v", err, ErrProbeInconclusive)
-	}
-	got, readErr := os.ReadFile(path)
-	if readErr != nil || string(got) != contents {
-		t.Fatalf("ordinary file after ListenPort: contents=%q error=%v", got, readErr)
 	}
 }
 

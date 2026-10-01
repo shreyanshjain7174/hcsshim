@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"sync"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 	"github.com/Microsoft/hcsshim/internal/safefile"
 
 	"github.com/sirupsen/logrus"
-	"golang.org/x/sys/windows"
 )
 
 var (
@@ -114,49 +112,14 @@ func newSerialRelay(ctx context.Context, path, id string) (*serialRelay, error) 
 // permits the unlink. The probe is detached from the caller's
 // cancellation, because a cancelled caller must not turn "in use" into "looks dead".
 func claimSerialPath(path string) error {
-	owner, err := safefile.OpenDeleteHandle(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("cannot inspect the COM1 serial socket %s: %w", path, err)
-	}
-	mode, err := owner.Mode()
-	if err != nil {
-		_ = owner.Close()
-		return fmt.Errorf("cannot inspect the COM1 serial socket %s: %w", path, err)
-	}
-	if mode&os.ModeSocket == 0 {
-		_ = owner.Close()
-		return fmt.Errorf("refusing to unlink the COM1 serial socket %s: %w", path, errSerialProbeInconclusive)
-	}
-
-	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), serialProbeBudget)
-	defer cancel()
-
-	connection, probeErr := serialProbeDial(probeCtx, "unix", path)
-	if probeErr == nil {
-		_ = connection.Close()
-		_ = owner.Close()
-		return fmt.Errorf("refusing to unlink the COM1 serial socket %s because a live peer answered on it: %w", path, errSerialPathInUse)
-	}
-	if !serialPathDefinitelyUnused(probeErr) {
-		_ = owner.Close()
-		return fmt.Errorf("refusing to unlink the COM1 serial socket %s: %w: %v", path, errSerialProbeInconclusive, probeErr)
-	}
-	if err := owner.Remove(); err != nil {
-		return fmt.Errorf("cannot remove the dead COM1 serial socket %s: %w", path, errors.Join(err, owner.Close()))
-	}
-	return nil
-}
-
-// serialPathDefinitelyUnused is the whole permissive set. Timed-out, access-denied, and
-// unknown answers are deliberately absent: they are preserved, not unlinked.
-func serialPathDefinitelyUnused(err error) bool {
-	return errors.Is(err, os.ErrNotExist) ||
-		errors.Is(err, windows.ERROR_FILE_NOT_FOUND) ||
-		errors.Is(err, windows.ERROR_PATH_NOT_FOUND) ||
-		errors.Is(err, windows.WSAECONNREFUSED)
+	return safefile.ClaimSocketPath(context.Background(), path, safefile.ClaimSocketPathOptions{
+		ProbeDial:            serialProbeDial,
+		ProbeBudget:          serialProbeBudget,
+		InUseError:           errSerialPathInUse,
+		InconclusiveError:    errSerialProbeInconclusive,
+		PathDescription:      "COM1 serial socket",
+		PathNotFoundIsUnused: true,
+	})
 }
 
 // relay accepts the single serial connection OpenVMM makes and copies it line by line into

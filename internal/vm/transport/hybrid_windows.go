@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -15,8 +14,6 @@ import (
 	"github.com/Microsoft/hcsshim/internal/safefile"
 
 	"github.com/Microsoft/go-winio/pkg/guid"
-
-	"golang.org/x/sys/windows"
 )
 
 const (
@@ -157,49 +154,14 @@ func (f *hybridFactory) listenAt(path string) (net.Listener, error) {
 // permits the unlink. The probe is detached from the caller's
 // cancellation, because a cancelled caller must not turn "in use" into "looks dead".
 func (f *hybridFactory) claimPath(path string) error {
-	owner, err := safefile.OpenDeleteHandle(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("cannot inspect the hybrid vsock path %s: %w", path, err)
-	}
-	mode, err := owner.Mode()
-	if err != nil {
-		_ = owner.Close()
-		return fmt.Errorf("cannot inspect the hybrid vsock path %s: %w", path, err)
-	}
-	if mode&os.ModeSocket == 0 {
-		_ = owner.Close()
-		return fmt.Errorf("refusing to unlink %s: %w", path, ErrProbeInconclusive)
-	}
-
-	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(context.Background()), socketProbeBudget)
-	defer cancel()
-
-	connection, probeErr := f.probeDial(probeCtx, "unix", path)
-	if probeErr == nil {
-		_ = connection.Close()
-		_ = owner.Close()
-		return fmt.Errorf("refusing to unlink %s because a live peer answered on it: %w", path, ErrPathInUse)
-	}
-	if !pathDefinitelyUnused(probeErr) {
-		_ = owner.Close()
-		return fmt.Errorf("refusing to unlink %s: %w: %v", path, ErrProbeInconclusive, probeErr)
-	}
-	if err := owner.Remove(); err != nil {
-		return fmt.Errorf("cannot remove the dead socket path %s: %w", path, errors.Join(err, owner.Close()))
-	}
-	return nil
-}
-
-// pathDefinitelyUnused is the whole permissive set. Timed-out, access-denied, and unknown
-// answers are deliberately absent: they are preserved, not unlinked.
-func pathDefinitelyUnused(err error) bool {
-	return errors.Is(err, os.ErrNotExist) ||
-		errors.Is(err, windows.ERROR_FILE_NOT_FOUND) ||
-		errors.Is(err, windows.ERROR_PATH_NOT_FOUND) ||
-		errors.Is(err, windows.WSAECONNREFUSED)
+	return safefile.ClaimSocketPath(context.Background(), path, safefile.ClaimSocketPathOptions{
+		ProbeDial:            f.probeDial,
+		ProbeBudget:          socketProbeBudget,
+		InUseError:           ErrPathInUse,
+		InconclusiveError:    ErrProbeInconclusive,
+		PathDescription:      "hybrid vsock path",
+		PathNotFoundIsUnused: true,
+	})
 }
 
 func (f *hybridFactory) Paths() []string { return f.book.paths() }

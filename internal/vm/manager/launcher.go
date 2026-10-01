@@ -54,7 +54,7 @@ var (
 	// file. That answer proves the pathname is occupied by something this launcher never
 	// created, so it is preserved: not-a-socket is evidence of a misconfiguration or of
 	// another owner's data, never of a stale socket this launcher may unlink.
-	errVMServiceSocketNotASocket = errors.New("the configured VM service socket path names an ordinary file, not a socket")
+	errVMServiceSocketNotASocket = safefile.ErrSocketPathNotASocket
 )
 
 const childDiagnosticLimit = 8 << 10
@@ -417,55 +417,17 @@ func (l *openvmmLauncher) abandonClaim(ctx context.Context, claim *hostSocketCla
 // and it is preserved. Only a definitively dead socket is removed, and the removal happens
 // through a handle to that exact object rather than by pathname.
 func (l *openvmmLauncher) claimSocketPath(ctx context.Context, socketPath string) error {
-	owner, err := safefile.OpenDeleteHandle(socketPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return fmt.Errorf("cannot inspect the socket pathname %s: %w", socketPath, err)
-	}
-	mode, err := owner.Mode()
-	if err != nil {
-		_ = owner.Close()
-		return fmt.Errorf("cannot inspect the socket pathname %s: %w", socketPath, err)
-	}
-	if mode&os.ModeSocket == 0 {
-		_ = owner.Close()
-		return fmt.Errorf("refusing to unlink %s: %w", socketPath, errVMServiceSocketNotASocket)
-	}
-
-	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), socketProbeBudget)
-	defer cancel()
-
-	connection, probeErr := l.probeDial(probeCtx, "unix", socketPath)
-	if probeErr == nil {
-		_ = connection.Close()
-		_ = owner.Close()
-		return fmt.Errorf("refusing to unlink %s because a live peer answered on it: %w", socketPath, errVMServiceSocketInUse)
-	}
-	if errors.Is(probeErr, windows.WSAENOTSOCK) {
-		_ = owner.Close()
-		return fmt.Errorf("refusing to unlink %s: %w", socketPath, errVMServiceSocketNotASocket)
-	}
-	if !socketDefinitelyUnused(probeErr) {
-		_ = owner.Close()
-		return fmt.Errorf("refusing to unlink %s because its probe did not prove the pathname stale: %w: %v", socketPath, errSocketProbeInconclusive, probeErr)
-	}
-	if err := owner.Remove(); err != nil {
-		return fmt.Errorf("cannot remove the dead socket pathname %s: %w", socketPath, errors.Join(err, owner.Close()))
-	}
-	return nil
+	return safefile.ClaimSocketPath(ctx, socketPath, safefile.ClaimSocketPathOptions{
+		ProbeDial:              l.probeDial,
+		ProbeBudget:            socketProbeBudget,
+		InUseError:             errVMServiceSocketInUse,
+		InconclusiveError:      errSocketProbeInconclusive,
+		PathDescription:        "socket pathname",
+		ProbeNotASocketIsError: true,
+	})
 }
 
-// socketDefinitelyUnused is the whole permissive set. Timed-out, access-denied, unknown,
-// and not-a-socket answers are deliberately absent: those pathnames are preserved.
-func socketDefinitelyUnused(err error) bool {
-	return errors.Is(err, os.ErrNotExist) ||
-		errors.Is(err, windows.ERROR_FILE_NOT_FOUND) ||
-		errors.Is(err, windows.WSAECONNREFUSED)
-}
-
-var errHybridBaseNotASocket = errors.New("the configured hybrid-vsock base names an ordinary file, not a socket")
+var errHybridBaseNotASocket = errVMServiceSocketNotASocket
 
 // removeDeadSocket unlinks a socket pathname whose owner is known to be gone. It refuses
 // anything that is not a socket, returning errHybridBaseNotASocket and leaving the file in

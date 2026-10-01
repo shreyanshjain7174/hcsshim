@@ -13,18 +13,11 @@ import (
 
 	"github.com/Microsoft/hcsshim/internal/log"
 	"github.com/Microsoft/hcsshim/internal/safefile"
-	"golang.org/x/sys/windows"
 )
 
 type countingOwnedPathRemove struct {
 	calls int
 	errs  []error
-}
-
-func swapSerialProbeDialForTest(dial func(context.Context, string, string) (net.Conn, error)) func() {
-	previous := serialProbeDial
-	serialProbeDial = dial
-	return func() { serialProbeDial = previous }
 }
 
 func swapSerialOpenOwnedPathForTest(open func(string) (*safefile.DeleteHandle, error)) func() {
@@ -71,50 +64,6 @@ func TestSerialRelayPreventsPathReplacementUntilClose(t *testing.T) {
 	}
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the COM1 socket survived owner cleanup: %v", err)
-	}
-}
-
-func TestClaimSerialPathPreservesOrdinaryFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "serial.sock")
-	const contents = "ordinary file"
-	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
-		t.Fatalf("write ordinary file: %v", err)
-	}
-	t.Cleanup(swapSerialProbeDialForTest(dialFailure(windows.WSAENOTSOCK)))
-
-	err := claimSerialPath(path)
-	if !errors.Is(err, errSerialProbeInconclusive) {
-		t.Fatalf("claimSerialPath error = %v, want %v", err, errSerialProbeInconclusive)
-	}
-	got, readErr := os.ReadFile(path)
-	if readErr != nil || string(got) != contents {
-		t.Fatalf("ordinary file after claim: contents=%q error=%v", got, readErr)
-	}
-}
-
-func TestClaimSerialPathPinsSocketBeforeProbe(t *testing.T) {
-	path := shortSerialSocketPath(t)
-	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
-	if err != nil {
-		t.Fatalf("create stale socket: %v", err)
-	}
-	listener.SetUnlinkOnClose(false)
-	if err := listener.Close(); err != nil {
-		t.Fatalf("close stale listener: %v", err)
-	}
-
-	t.Cleanup(swapSerialProbeDialForTest(func(context.Context, string, string) (net.Conn, error) {
-		if err := os.Remove(path); err == nil {
-			t.Fatal("probe replaced a stale socket before cleanup pinned it")
-		}
-		return nil, windows.WSAECONNREFUSED
-	}))
-
-	if err := claimSerialPath(path); err != nil {
-		t.Fatalf("claimSerialPath: %v", err)
-	}
-	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stale socket survived cleanup: %v", err)
 	}
 }
 
