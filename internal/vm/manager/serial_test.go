@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/Microsoft/hcsshim/internal/log"
@@ -47,6 +48,40 @@ func TestSerialRelayPreventsPathReplacementUntilClose(t *testing.T) {
 	}
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("the COM1 socket survived owner cleanup: %v", err)
+	}
+}
+
+func TestSerialRelayCloseRetriesPathRemovalAfterTransientFailure(t *testing.T) {
+	relay, path := newTestSerialRelay(t)
+	owner := relay.owner
+	t.Cleanup(func() {
+		_ = os.Chmod(path, 0600)
+		_ = owner.Close()
+	})
+
+	if err := os.Chmod(path, 0400); err != nil {
+		t.Fatalf("make COM1 socket read-only: %v", err)
+	}
+	if err := relay.Close(); !errors.Is(err, syscall.ERROR_ACCESS_DENIED) {
+		t.Fatalf("first Close = %v, want access denied removing the read-only socket", err)
+	}
+	if _, err := os.Lstat(path); err != nil {
+		t.Fatalf("the COM1 pathname vanished despite a failed removal: %v", err)
+	}
+
+	if err := os.Chmod(path, 0600); err != nil {
+		t.Fatalf("make COM1 socket writable: %v", err)
+	}
+	if err := relay.Close(); err != nil {
+		t.Fatalf("retry Close: %v", err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the COM1 pathname survived a successful retry: %v", err)
+	}
+
+	relay.owner = nil
+	if err := relay.Close(); err != nil {
+		t.Fatalf("third Close retried a settled removal: %v", err)
 	}
 }
 
