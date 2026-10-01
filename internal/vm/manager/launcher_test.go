@@ -326,3 +326,38 @@ func TestLaunchRefusesWhileAnotherProcessHoldsTheHostClaim(t *testing.T) {
 		t.Fatal("a child was spawned while another process held the host claim")
 	}
 }
+
+func TestLaunchReadinessFailureTerminatesChild(t *testing.T) {
+	oldGrace := gracefulExitBudget
+	gracefulExitBudget = time.Millisecond
+	t.Cleanup(func() { gracefulExitBudget = oldGrace })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	child := newFakeOwnedChild()
+	swapStartProcessForTest(t, func(string, []string) (ownedChild, error) {
+		cancel()
+		return child, nil
+	})
+	socketPath := shortLauncherSocketPath(t)
+	launcher := newLauncher(&Config{
+		OpenVMMBinaryPath: os.Args[0],
+		VMServiceSocket:   socketPath,
+		HybridVsockBase:   shortHybridBasePath(t),
+	})
+	launcher.probeDial = dialFailure(os.ErrNotExist)
+
+	if path, err := launcher.Launch(ctx, "sandbox"); path != "" || !errors.Is(err, context.Canceled) {
+		t.Fatalf("Launch = %q, %v, want readiness cancellation", path, err)
+	}
+	if !child.killed.Load() || !child.closed.Load() {
+		t.Fatalf("child killed=%v closed=%v, want both after readiness failure", child.killed.Load(), child.closed.Load())
+	}
+	claim, err := acquireHostSocketClaim(socketPath)
+	if err != nil {
+		t.Fatalf("claim survived readiness failure: %v", err)
+	}
+	if err := claim.Release(); err != nil {
+		t.Fatalf("release final claim: %v", err)
+	}
+}

@@ -130,7 +130,7 @@ func TestNewDirectCreateRPCFailureClosesSerialListener(t *testing.T) {
 	if connection.closeCalls != 1 || launcher.terminateCalls != 1 {
 		t.Fatalf("close calls=%d terminate calls=%d, want 1 each", connection.closeCalls, launcher.terminateCalls)
 	}
-	if _, statErr := os.Stat(config.SerialSocket); !errors.Is(statErr, os.ErrNotExist) {
+	if _, statErr := os.Stat(config.ForVM(opts.ID).SerialSocket); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("serial socket survived RPC failure: %v", statErr)
 	}
 }
@@ -242,10 +242,6 @@ func (f *fakeDirectLauncher) Terminate(ctx context.Context) error {
 	f.terminateErrs = f.terminateErrs[1:]
 	return err
 }
-
-type nilReader struct{}
-
-func (nilReader) Read([]byte) (int, error) { return 0, io.EOF }
 
 type recordingCloser struct{ closeCalls int }
 

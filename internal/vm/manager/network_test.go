@@ -216,48 +216,6 @@ func (f *fakeModifyVMClient) totalCallCount() int {
 
 var _ vmservice.VMClient = (*fakeModifyVMClient)(nil)
 
-func TestFakeModifyVMClientCountsEveryRPC(t *testing.T) {
-	client := &fakeModifyVMClient{}
-	ctx := context.Background()
-	calls := []struct {
-		name string
-		call func() error
-	}{
-		{name: "CreateVM", call: func() error { _, err := client.CreateVM(ctx, &vmservice.CreateVMRequest{}); return err }},
-		{name: "TeardownVM", call: func() error { _, err := client.TeardownVM(ctx, &emptypb.Empty{}); return err }},
-		{name: "PauseVM", call: func() error { _, err := client.PauseVM(ctx, &emptypb.Empty{}); return err }},
-		{name: "ResumeVM", call: func() error { _, err := client.ResumeVM(ctx, &emptypb.Empty{}); return err }},
-		{name: "WaitVM", call: func() error { _, err := client.WaitVM(ctx, &emptypb.Empty{}); return err }},
-		{name: "CapabilitiesVM", call: func() error { _, err := client.CapabilitiesVM(ctx, &emptypb.Empty{}); return err }},
-		{name: "PropertiesVM", call: func() error { _, err := client.PropertiesVM(ctx, &vmservice.PropertiesVMRequest{}); return err }},
-		{name: "ModifyResource", call: func() error { _, err := client.ModifyResource(ctx, &vmservice.ModifyResourceRequest{}); return err }},
-		{name: "AddPcieDevice", call: func() error { _, err := client.AddPcieDevice(ctx, &vmservice.AddPcieDeviceRequest{}); return err }},
-		{name: "RemovePcieDevice", call: func() error { _, err := client.RemovePcieDevice(ctx, &vmservice.RemovePcieDeviceRequest{}); return err }},
-		{name: "Quit", call: func() error { _, err := client.Quit(ctx, &emptypb.Empty{}); return err }},
-	}
-
-	for _, call := range calls {
-		if err := call.call(); err != nil {
-			t.Fatalf("%s: %v", call.name, err)
-		}
-	}
-	if got := client.totalCallCount(); got != len(calls) {
-		t.Fatalf("total VM RPC count = %d, want %d", got, len(calls))
-	}
-	if got := len(client.createCalls); got != 1 {
-		t.Fatalf("CreateVM count = %d, want 1", got)
-	}
-	if got := len(client.calls()); got != 1 {
-		t.Fatalf("ModifyResource count = %d, want 1", got)
-	}
-	if got := client.teardownCallCount(); got != 1 {
-		t.Fatalf("TeardownVM count = %d, want 1", got)
-	}
-	if got := client.quitCallCount(); got != 1 {
-		t.Fatalf("Quit count = %d, want 1", got)
-	}
-}
-
 // fakeEndpointPortBinder is the test double for EndpointPortBinder. bindResults and
 // unbindErrs are queues: each call pops the front entry, and the last entry repeats once
 // the queue is drained to zero.
