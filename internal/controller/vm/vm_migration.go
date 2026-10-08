@@ -25,6 +25,9 @@ const compatibilityInfoProperty = "CompatibilityInfo"
 // outgoing live migration. Once it succeeds the VM accepts only live-migration
 // calls until the migration completes or is rolled back.
 func (c *Controller) InitializeLiveMigrationOnSource(ctx context.Context, options *hcsschema.MigrationInitializeOptions) error {
+	if err := c.rejectUnsupportedMigration("InitializeLiveMigrationOnSource"); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -65,6 +68,9 @@ func (c *Controller) InitializeLiveMigrationOnSource(ctx context.Context, option
 // the two hosts can interchange live-migration state. Available while the VM is
 // running or migrating.
 func (c *Controller) CompatibilityInfo(ctx context.Context) ([]byte, error) {
+	if err := c.rejectUnsupportedMigration("CompatibilityInfo"); err != nil {
+		return nil, err
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -102,6 +108,9 @@ func (c *Controller) CompatibilityInfo(ctx context.Context) ([]byte, error) {
 // channel lives for the VM's lifetime, so callers can subscribe any time after
 // the VM is created and will not miss early events.
 func (c *Controller) MigrationNotifications() (<-chan hcsschema.OperationSystemMigrationNotificationInfo, error) {
+	if err := c.rejectUnsupportedMigration("MigrationNotifications"); err != nil {
+		return nil, err
+	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
@@ -123,6 +132,9 @@ func (c *Controller) MigrationNotifications() (<-chan hcsschema.OperationSystemM
 // migration over the supplied transport socket. On return the VM is migrating
 // and awaiting the source's state transfer.
 func (c *Controller) StartWithMigrationOptions(ctx context.Context, config *hcs.MigrationConfig) error {
+	if err := c.rejectUnsupportedMigration("StartWithMigrationOptions"); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -154,6 +166,9 @@ func (c *Controller) StartWithMigrationOptions(ctx context.Context, config *hcs.
 // supplied transport socket. The memory-transfer phase is driven separately via
 // [Controller.StartLiveMigrationTransfer].
 func (c *Controller) StartLiveMigrationOnSource(ctx context.Context, config *hcs.MigrationConfig) error {
+	if err := c.rejectUnsupportedMigration("StartLiveMigrationOnSource"); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -178,6 +193,9 @@ func (c *Controller) StartLiveMigrationOnSource(ctx context.Context, config *hcs
 // StartLiveMigrationTransfer drives the memory-transfer phase of an in-progress
 // migration. Progress is reported through [Controller.MigrationNotifications].
 func (c *Controller) StartLiveMigrationTransfer(ctx context.Context, options *hcsschema.MigrationTransferOptions) error {
+	if err := c.rejectUnsupportedMigration("StartLiveMigrationTransfer"); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -200,6 +218,9 @@ func (c *Controller) StartLiveMigrationTransfer(ctx context.Context, options *hc
 // stopped side (the source in the forward flow, the destination in the reverse);
 // a Resume finalize returns control to the caller, who must then call [Controller.Resume].
 func (c *Controller) FinalizeLiveMigration(ctx context.Context, options *hcsschema.MigrationFinalizedOptions) error {
+	if err := c.rejectUnsupportedMigration("FinalizeLiveMigration"); err != nil {
+		return err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -254,6 +275,9 @@ func (c *Controller) FinalizeLiveMigration(ctx context.Context, options *hcssche
 // serializes Cancel behind its own lock, so that write is already published here.
 // A nil uvm means the VM was never created.
 func (c *Controller) CancelLiveMigration(ctx context.Context, options *hcsschema.MigrationCancelOptions) error {
+	if err := c.rejectUnsupportedMigration("CancelLiveMigration"); err != nil {
+		return err
+	}
 	if c.uvm == nil {
 		return fmt.Errorf("cannot cancel live migration: VM not created")
 	}

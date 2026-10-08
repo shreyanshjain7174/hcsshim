@@ -10,19 +10,27 @@ import (
 
 	"github.com/Microsoft/hcsshim/internal/builder/vm/lcow"
 	"github.com/Microsoft/hcsshim/internal/controller/device/plan9"
+	"github.com/Microsoft/hcsshim/internal/controller/device/scsi"
+	"github.com/Microsoft/hcsshim/internal/controller/device/scsi/disk"
 	"github.com/Microsoft/hcsshim/internal/controller/network"
 	hcsschema "github.com/Microsoft/hcsshim/internal/hcs/schema2"
+	"github.com/Microsoft/hcsshim/internal/protocol/guestrequest"
 	"github.com/Microsoft/hcsshim/internal/protocol/guestresource"
+	"github.com/Microsoft/hcsshim/internal/vm/guestmanager"
 	"github.com/Microsoft/hcsshim/internal/vm/vmmanager"
 	"github.com/Microsoft/hcsshim/internal/vm/vmutils"
 
-	"github.com/Microsoft/go-winio"
+	"github.com/Microsoft/go-winio/pkg/guid"
+	"github.com/containerd/errdefs"
 	"golang.org/x/sync/errgroup"
 )
 
 // platformControllers holds platform-specific sub-controllers embedded in [Controller].
 // For LCOW, this includes the Plan9 file share controller.
 type platformControllers struct {
+	// A nil directCreate selects the HCS cold-create path.
+	directCreate DirectCreateFunc
+
 	// plan9Controller manages Plan9 file share mounts for this VM.
 	plan9Controller *plan9.Controller
 
@@ -36,6 +44,16 @@ type platformControllers struct {
 	// nextBridgeID is the GCS bridge request-id floor restored from a
 	// migration snapshot; consumed by [Controller.Resume].
 	nextBridgeID int64
+}
+
+// NewWithDirectCreate creates an LCOW controller that must use the supplied direct VM creator.
+func NewWithDirectCreate(create DirectCreateFunc) (*Controller, error) {
+	if create == nil {
+		return nil, fmt.Errorf("direct VM creator is required")
+	}
+	c := New()
+	c.directCreate = create
+	return c, nil
 }
 
 // SandboxOptions returns the sandbox options stored during CreateVM.
@@ -137,10 +155,7 @@ func (c *Controller) Plan9Controller() *plan9.Controller {
 // random data to the Linux init process when it connects.
 func (c *Controller) setupEntropyListener(ctx context.Context, group *errgroup.Group) error {
 	// The Linux guest will connect to this port during init to receive entropy.
-	entropyConn, err := winio.ListenHvsock(&winio.HvsockAddr{
-		VMID:      c.uvm.RuntimeID(),
-		ServiceID: winio.VsockServiceID(vmutils.LinuxEntropyVsockPort),
-	})
+	entropyConn, err := c.transport.ListenPort(vmutils.LinuxEntropyVsockPort)
 	if err != nil {
 		return fmt.Errorf("failed to listen on hvSocket for entropy: %w", err)
 	}
@@ -183,10 +198,7 @@ func (c *Controller) setupLoggingListener(ctx context.Context, group *errgroup.G
 	done := c.logOutputDone
 
 	// The GCS will connect to this port to stream log output.
-	logConn, err := winio.ListenHvsock(&winio.HvsockAddr{
-		VMID:      c.uvm.RuntimeID(),
-		ServiceID: winio.VsockServiceID(vmutils.LinuxLogVsockPort),
-	})
+	logConn, err := c.transport.ListenPort(vmutils.LinuxLogVsockPort)
 	if err != nil {
 		close(done)
 		return fmt.Errorf("failed to listen on hvSocket for logs: %w", err)
@@ -224,4 +236,70 @@ func (c *Controller) setupLoggingListener(ctx context.Context, group *errgroup.G
 // For LCOW, no additional finalization is needed.
 func (c *Controller) finalizeGCSConnection(_ context.Context) error {
 	return nil
+}
+
+// DirectCreateResult is the native OpenVMM create outcome.
+type DirectCreateResult struct {
+	ComputeSystem      vmmanager.ComputeSystem
+	RuntimeID          guid.GUID
+	SandboxOptions     *lcow.SandboxOptions
+	RootfsReservations []RootfsReservation
+}
+
+// RootfsReservation is a SCSI rootfs slot installed on the direct-create path.
+type RootfsReservation struct {
+	Controller uint
+	Lun        uint
+	Config     disk.Config
+}
+
+// DirectCreateFunc creates an OpenVMM compute system from existing CreateOptions.
+type DirectCreateFunc func(ctx context.Context, opts *CreateOptions) (*DirectCreateResult, error)
+
+func (c *Controller) rejectUnsupportedMigration(operation string) error {
+	if c.directCreate == nil {
+		return nil
+	}
+	return fmt.Errorf("%s is not supported by the OpenVMM runtime: %w", operation, errdefs.ErrNotImplemented)
+}
+
+func (c *Controller) createColdVM(ctx context.Context, opts *CreateOptions) (*coldCreateResult, error) {
+	if c.directCreate == nil {
+		doc, err := c.buildHCSConfig(ctx, opts)
+		if err != nil {
+			return nil, fmt.Errorf("failed to build VM config: %w", err)
+		}
+		uvm, err := vmmanager.Create(ctx, opts.ID, doc)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create VM: %w", err)
+		}
+		return &coldCreateResult{uvm: uvm, hcsDocument: doc}, nil
+	}
+
+	result, err := c.directCreate(ctx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create VM directly: %w", err)
+	}
+	if result == nil {
+		return nil, fmt.Errorf("failed to create VM directly: callback returned no result")
+	}
+	uvm, err := vmmanager.WrapCreatedSystem(ctx, opts.ID, result.ComputeSystem, result.RuntimeID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to wrap directly created VM: %w", err)
+	}
+	return &coldCreateResult{
+		uvm: uvm,
+		prepare: func(ctx context.Context, uvm *vmmanager.UtilityVM, guest *guestmanager.Guest) (func(), error) {
+			scsiController := scsi.New(len(guestrequest.ScsiControllerGuids), uvm, guest)
+			for _, reservation := range result.RootfsReservations {
+				if err := scsiController.ReserveForRootfs(ctx, reservation.Controller, reservation.Lun, reservation.Config); err != nil {
+					return nil, fmt.Errorf("reserve SCSI slot (controller=%d, lun=%d): %w", reservation.Controller, reservation.Lun, err)
+				}
+			}
+			return func() {
+				c.sandboxOptions = result.SandboxOptions
+				c.scsiController = scsiController
+			}, nil
+		},
+	}, nil
 }
