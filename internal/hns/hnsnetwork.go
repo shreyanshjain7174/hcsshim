@@ -28,6 +28,7 @@ type MacPool struct {
 // HNSNetwork represents a network in HNS
 type HNSNetwork struct {
 	Id                   string            `json:"ID,omitempty"`
+	SwitchGuid           string            `json:",omitempty"`
 	Name                 string            `json:",omitempty"`
 	Type                 string            `json:",omitempty"`
 	NetworkAdapterName   string            `json:",omitempty"`
