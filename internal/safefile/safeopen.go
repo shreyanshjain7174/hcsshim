@@ -3,12 +3,17 @@
 package safefile
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
+	"time"
 	"unicode/utf16"
 	"unsafe"
 
@@ -16,6 +21,7 @@ import (
 	"github.com/Microsoft/hcsshim/internal/winapi"
 
 	winio "github.com/Microsoft/go-winio"
+	"golang.org/x/sys/windows"
 )
 
 // TODO(go1.24): use [os.Root] and co. here
@@ -214,6 +220,76 @@ func deleteOnClose(f *os.File) error {
 	return nil
 }
 
+// DeleteHandle pins one filesystem object behind a handle that denies delete sharing.
+// Remove therefore cannot be redirected to a replacement inserted at the same pathname.
+type DeleteHandle struct {
+	mu      sync.Mutex
+	path    string
+	file    *os.File
+	removed bool
+}
+
+// OpenDeleteHandle opens path with delete access while denying delete sharing.
+func OpenDeleteHandle(path string) (*DeleteHandle, error) {
+	file, err := winio.OpenForBackup(
+		path,
+		winapi.DELETE|winapi.FILE_READ_ATTRIBUTES,
+		syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE,
+		syscall.OPEN_EXISTING,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return &DeleteHandle{path: path, file: file}, nil
+}
+
+// Mode returns the mode of the pinned object.
+func (h *DeleteHandle) Mode() (os.FileMode, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.file == nil {
+		return 0, fmt.Errorf("cannot inspect %s: no ownership handle", h.path)
+	}
+	info, err := h.file.Stat()
+	if err != nil {
+		return 0, err
+	}
+	return info.Mode(), nil
+}
+
+// Remove marks the pinned object for deletion and closes the handle.
+func (h *DeleteHandle) Remove() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.removed {
+		return nil
+	}
+	if h.file == nil {
+		return fmt.Errorf("cannot remove %s: no ownership handle", h.path)
+	}
+	if err := deleteOnClose(h.file); err != nil {
+		return &os.PathError{Op: "remove", Path: h.path, Err: err}
+	}
+	if err := h.file.Close(); err != nil {
+		return &os.PathError{Op: "remove", Path: h.path, Err: err}
+	}
+	h.file = nil
+	h.removed = true
+	return nil
+}
+
+// Close releases the ownership handle without deleting the object.
+func (h *DeleteHandle) Close() error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.file == nil {
+		return nil
+	}
+	err := h.file.Close()
+	h.file = nil
+	return err
+}
+
 // clearReadOnly clears the readonly attribute on a file.
 func clearReadOnly(f *os.File) error {
 	bi, err := winio.GetFileBasicInfo(f)
@@ -402,4 +478,70 @@ func EnsureNotReparsePointRelative(path string, root *os.File) error {
 	}
 	f.Close()
 	return nil
+}
+
+// ErrSocketPathNotASocket reports a socket path that names an ordinary file.
+var ErrSocketPathNotASocket = errors.New("the path names an ordinary file, not a socket")
+
+// ClaimSocketPathOptions configures ClaimSocketPath.
+type ClaimSocketPathOptions struct {
+	ProbeDial         func(context.Context, string, string) (net.Conn, error)
+	ProbeBudget       time.Duration
+	InUseError        error
+	InconclusiveError error
+	PathDescription   string
+	// PathNotFoundIsUnused treats ERROR_PATH_NOT_FOUND as proof that the socket is unused.
+	PathNotFoundIsUnused bool
+	// ProbeNotASocketIsError treats WSAENOTSOCK as an ordinary-file error.
+	ProbeNotASocketIsError bool
+}
+
+// ClaimSocketPath removes path only when a pinned socket probe proves it unused.
+func ClaimSocketPath(ctx context.Context, path string, options ClaimSocketPathOptions) error {
+	owner, err := OpenDeleteHandle(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("cannot inspect the %s %s: %w", options.PathDescription, path, err)
+	}
+	mode, err := owner.Mode()
+	if err != nil {
+		_ = owner.Close()
+		return fmt.Errorf("cannot inspect the %s %s: %w", options.PathDescription, path, err)
+	}
+	if mode&os.ModeSocket == 0 {
+		_ = owner.Close()
+		return fmt.Errorf("refusing to unlink the %s %s: %w", options.PathDescription, path, ErrSocketPathNotASocket)
+	}
+
+	probeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), options.ProbeBudget)
+	defer cancel()
+
+	connection, probeErr := options.ProbeDial(probeCtx, "unix", path)
+	if probeErr == nil {
+		_ = connection.Close()
+		_ = owner.Close()
+		return fmt.Errorf("refusing to unlink the %s %s because a live peer answered on it: %w", options.PathDescription, path, options.InUseError)
+	}
+	if options.ProbeNotASocketIsError && errors.Is(probeErr, windows.WSAENOTSOCK) {
+		_ = owner.Close()
+		return fmt.Errorf("refusing to unlink the %s %s: %w", options.PathDescription, path, ErrSocketPathNotASocket)
+	}
+	// Timeouts, access denied, unknown errors, and unselected not-a-socket remain inconclusive.
+	if !socketDefinitelyUnused(probeErr, options.PathNotFoundIsUnused) {
+		_ = owner.Close()
+		return fmt.Errorf("refusing to unlink the %s %s: %w: %w", options.PathDescription, path, options.InconclusiveError, probeErr)
+	}
+	if err := owner.Remove(); err != nil {
+		return fmt.Errorf("cannot remove the dead %s %s: %w", options.PathDescription, path, errors.Join(err, owner.Close()))
+	}
+	return nil
+}
+
+func socketDefinitelyUnused(err error, pathNotFoundIsUnused bool) bool {
+	return errors.Is(err, os.ErrNotExist) ||
+		errors.Is(err, windows.ERROR_FILE_NOT_FOUND) ||
+		pathNotFoundIsUnused && errors.Is(err, windows.ERROR_PATH_NOT_FOUND) ||
+		errors.Is(err, windows.WSAECONNREFUSED)
 }
