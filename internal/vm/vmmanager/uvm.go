@@ -7,7 +7,6 @@ import (
 	"fmt"
 
 	hcsschema "github.com/Microsoft/hcsshim/internal/hcs/schema2"
-	hcs "github.com/Microsoft/hcsshim/internal/hcs/v2"
 	"github.com/Microsoft/hcsshim/internal/log"
 	"github.com/Microsoft/hcsshim/internal/logfields"
 
@@ -22,7 +21,7 @@ import (
 type UtilityVM struct {
 	id   string
 	vmID guid.GUID
-	cs   *hcs.System
+	cs   ComputeSystem
 }
 
 // Create creates a new utility VM with the given ID and compute system configuration.
@@ -30,31 +29,27 @@ type UtilityVM struct {
 // This method returns the concrete UtilityVM. Callers
 // can use the manager interfaces (for example, LifetimeManager, NetworkManager)
 // as needed.
+//
+// OpenVMM-created systems enter through [WrapCreatedSystem].
 func Create(ctx context.Context, id string, config *hcsschema.ComputeSystem) (*UtilityVM, error) {
-	cs, err := hcs.CreateComputeSystem(ctx, id, config)
+	cs, vmID, err := createHCSComputeSystem(ctx, id, config)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create compute system: %w", err)
+		return nil, err
 	}
+	return WrapCreatedSystem(ctx, id, cs, vmID)
+}
 
-	defer func() {
-		if cs != nil {
-			_ = cs.Terminate(ctx)
-			_ = cs.WaitCtx(ctx)
-		}
-	}()
+// WrapCreatedSystem wraps an already-created compute system and assigns its identity.
+func WrapCreatedSystem(ctx context.Context, id string, computeSystem ComputeSystem, runtimeID guid.GUID) (*UtilityVM, error) {
+	if computeSystem == nil {
+		return nil, fmt.Errorf("cannot wrap utility VM %q: nil compute system", id)
+	}
 
 	uvm := &UtilityVM{
-		id: id,
+		id:   id,
+		vmID: runtimeID,
+		cs:   computeSystem,
 	}
-
-	// Cache the VM ID of the utility VM.
-	properties, err := cs.Properties(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get compute system properties: %w", err)
-	}
-	uvm.vmID = properties.RuntimeID
-	uvm.cs = cs
-	cs = nil
 
 	log.G(ctx).WithFields(logrus.Fields{
 		logfields.UVMID: uvm.id,
