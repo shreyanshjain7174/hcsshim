@@ -1,6 +1,9 @@
 package guestresource
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/Microsoft/hcsshim/internal/protocol/guestrequest"
 	"github.com/opencontainers/runtime-spec/specs-go"
 
@@ -57,6 +60,9 @@ const (
 	ResourceTypePolicyFragment guestrequest.ResourceType = "SecurityPolicyFragment"
 	// ResourceTypePodCgroupMemoryLimit is used to force a cgroup memory limit update in the guest.
 	ResourceTypePodCgroupMemoryLimit guestrequest.ResourceType = "PodCgroupMemoryLimit"
+	// ResourceTypePodMemoryLimit sets the memory limit of one pod's cgroup.
+	// Unlike ResourceTypePodCgroupMemoryLimit it never touches the shared pods budget.
+	ResourceTypePodMemoryLimit guestrequest.ResourceType = "PodMemoryLimit"
 )
 
 // This class is used by a modify request to add or remove a combined layers
@@ -217,6 +223,37 @@ type LCOWRoute struct {
 type LCOWContainerConstraints struct {
 	Windows specs.WindowsResources `json:",omitempty"`
 	Linux   specs.LinuxResources   `json:",omitempty"`
+}
+
+// LCOWPodMemoryLimit sets the memory limit of the cgroup of a single pod
+// registered in the guest.
+type LCOWPodMemoryLimit struct {
+	PodID string `json:",omitempty"`
+	// LimitInBytes is a finite, positive byte count.
+	LimitInBytes *int64 `json:",omitempty"`
+}
+
+// ValidatePodMemoryLimitInBytes rejects anything but a finite, positive byte
+// count. OCI's -1 (unlimited) is rejected: cgroup v2 spells it "max".
+func ValidatePodMemoryLimitInBytes(limit int64) error {
+	if limit <= 0 {
+		return fmt.Errorf("invalid pod memory limit %d: must be a positive byte count (unlimited is not supported)", limit)
+	}
+	return nil
+}
+
+// Validate rejects missing settings, an empty PodID and a missing or invalid limit.
+func (s *LCOWPodMemoryLimit) Validate() error {
+	if s == nil {
+		return errors.New("pod memory limit settings are missing")
+	}
+	if s.PodID == "" {
+		return errors.New("pod memory limit settings have an empty PodID")
+	}
+	if s.LimitInBytes == nil {
+		return fmt.Errorf("pod memory limit settings for pod %q have no LimitInBytes", s.PodID)
+	}
+	return ValidatePodMemoryLimitInBytes(*s.LimitInBytes)
 }
 
 // SignalProcessOptionsLCOW is the options passed to LCOW to signal a given

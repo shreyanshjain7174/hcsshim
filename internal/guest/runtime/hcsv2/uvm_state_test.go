@@ -5,10 +5,14 @@ package hcsv2
 
 import (
 	"context"
+	"errors"
 	"io"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/Microsoft/hcsshim/internal/guest/cgroup"
+	"github.com/Microsoft/hcsshim/internal/guest/prot"
 	"github.com/Microsoft/hcsshim/internal/protocol/guestrequest"
 	"github.com/Microsoft/hcsshim/internal/protocol/guestresource"
 	"github.com/Microsoft/hcsshim/pkg/securitypolicy"
@@ -83,6 +87,179 @@ func TestModifyHostSettingsRejectsInvalidPodCgroupMemoryLimitRequestType(t *test
 				t.Fatalf("modifyHostSettings returned %v, want invalid RequestType error", err)
 			}
 		})
+	}
+}
+
+// testPodCgroup records Update calls; other cgroup.Manager methods are unused here.
+type testPodCgroup struct {
+	cgroup.Manager
+	limit     int64
+	updates   int
+	calls     []*oci.LinuxResources
+	updateErr error
+}
+
+func (cg *testPodCgroup) Update(resources *oci.LinuxResources) error {
+	cg.calls = append(cg.calls, resources)
+	if cg.updateErr != nil {
+		return cg.updateErr
+	}
+	cg.updates++
+	cg.limit = *resources.Memory.Limit
+	return nil
+}
+
+func newHostWithPods(t *testing.T, ids ...string) (*Host, map[string]*testPodCgroup) {
+	t.Helper()
+	host := NewHost(nil, nil, &securitypolicy.OpenDoorSecurityPolicyEnforcer{}, io.Discard)
+	cgroups := make(map[string]*testPodCgroup, len(ids))
+	for _, id := range ids {
+		cg := &testPodCgroup{limit: -1}
+		cgroups[id] = cg
+		host.pods[id] = &pod{sandboxID: id, cgroupControl: cg, containers: map[string]bool{id: true}}
+	}
+	return host, cgroups
+}
+
+func podMemoryLimitRequest(requestType guestrequest.RequestType, settings interface{}) *guestrequest.ModificationRequest {
+	return &guestrequest.ModificationRequest{
+		ResourceType: guestresource.ResourceTypePodMemoryLimit,
+		RequestType:  requestType,
+		Settings:     settings,
+	}
+}
+
+func podMemoryLimit(podID string, limit int64) *guestresource.LCOWPodMemoryLimit {
+	return &guestresource.LCOWPodMemoryLimit{PodID: podID, LimitInBytes: &limit}
+}
+
+func onlyMemoryLimit(limit int64) *oci.LinuxResources {
+	return &oci.LinuxResources{Memory: &oci.LinuxMemory{Limit: &limit}}
+}
+
+func TestModifyHostSettingsPodMemoryLimitUpdatesOnlyTargetPod(t *testing.T) {
+	const limit int64 = 134217728
+	host, cgroups := newHostWithPods(t, "pod1", "pod2")
+
+	err := host.modifyHostSettings(context.Background(), UVMContainerID,
+		podMemoryLimitRequest(guestrequest.RequestTypeUpdate, podMemoryLimit("pod1", limit)))
+	if err != nil {
+		t.Fatalf("modifyHostSettings(%d) returned %v", limit, err)
+	}
+	if got := cgroups["pod1"].calls; len(got) != 1 || !reflect.DeepEqual(got[0], onlyMemoryLimit(limit)) {
+		t.Fatalf("pod1 Update calls = %+v; want exactly one Memory.Limit=%d write", got, limit)
+	}
+	if len(cgroups["pod2"].calls) != 0 || cgroups["pod2"].limit != -1 {
+		t.Fatalf("sibling pod2 changed: calls=%d limit=%d", len(cgroups["pod2"].calls), cgroups["pod2"].limit)
+	}
+}
+
+func TestModifyHostSettingsPodMemoryLimitRejectsInvalidRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		req     *guestrequest.ModificationRequest
+		wantErr string
+	}{
+		{"unknown pod", podMemoryLimitRequest(guestrequest.RequestTypeUpdate, podMemoryLimit("nope", 1)), "does not exist"},
+		{"add request type", podMemoryLimitRequest(guestrequest.RequestTypeAdd, podMemoryLimit("pod1", 1)), "RequestType"},
+		{"remove request type", podMemoryLimitRequest(guestrequest.RequestTypeRemove, podMemoryLimit("pod1", 1)), "RequestType"},
+		{"nil settings", podMemoryLimitRequest(guestrequest.RequestTypeUpdate, nil), "LCOWPodMemoryLimit"},
+		{"typed nil settings", podMemoryLimitRequest(guestrequest.RequestTypeUpdate, (*guestresource.LCOWPodMemoryLimit)(nil)), "missing"},
+		{"container settings", podMemoryLimitRequest(guestrequest.RequestTypeUpdate, &guestresource.LCOWContainerConstraints{}), "LCOWPodMemoryLimit"},
+		{"empty pod id", podMemoryLimitRequest(guestrequest.RequestTypeUpdate, podMemoryLimit("", 1)), "empty PodID"},
+		{"nil limit", podMemoryLimitRequest(guestrequest.RequestTypeUpdate, &guestresource.LCOWPodMemoryLimit{PodID: "pod1"}), "LimitInBytes"},
+		{"zero limit", podMemoryLimitRequest(guestrequest.RequestTypeUpdate, podMemoryLimit("pod1", 0)), "invalid pod memory limit"},
+		{"unlimited -1", podMemoryLimitRequest(guestrequest.RequestTypeUpdate, podMemoryLimit("pod1", -1)), "invalid pod memory limit"},
+		{"negative limit", podMemoryLimitRequest(guestrequest.RequestTypeUpdate, podMemoryLimit("pod1", -2)), "invalid pod memory limit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			host, cgroups := newHostWithPods(t, "pod1")
+			err := host.modifyHostSettings(context.Background(), UVMContainerID, tc.req)
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("modifyHostSettings returned %v, want error containing %q", err, tc.wantErr)
+			}
+			if n := len(cgroups["pod1"].calls); n != 0 {
+				t.Fatalf("pod1 cgroup Update called %d times on rejected request", n)
+			}
+		})
+	}
+}
+
+// TestModifyHostSettingsPodMemoryLimitWire drives raw bridge JSON through the
+// real decoder into the handler.
+func TestModifyHostSettingsPodMemoryLimitWire(t *testing.T) {
+	message := func(settings string) []byte {
+		m := `{"Request":{"ResourceType":"PodMemoryLimit","RequestType":"Update"`
+		if settings != "" {
+			m += `,"Settings":` + settings
+		}
+		return []byte(m + `}}`)
+	}
+	handle := func(host *Host, b []byte) error {
+		request, err := prot.UnmarshalContainerModifySettings(b)
+		if err != nil {
+			return err
+		}
+		return host.modifyHostSettings(context.Background(), UVMContainerID, request.Request.(*guestrequest.ModificationRequest))
+	}
+
+	host, cgroups := newHostWithPods(t, "pod1", "pod2")
+	if err := handle(host, message(`{"PodID":"pod1","LimitInBytes":134217728}`)); err != nil {
+		t.Fatalf("valid wire request returned %v", err)
+	}
+	if got := cgroups["pod1"].calls; len(got) != 1 || !reflect.DeepEqual(got[0], onlyMemoryLimit(134217728)) || len(cgroups["pod2"].calls) != 0 {
+		t.Fatalf("valid wire request: pod1 calls=%+v pod2 calls=%d", got, len(cgroups["pod2"].calls))
+	}
+
+	for name, settings := range map[string]string{
+		"omitted settings": "",
+		"null settings":    `null`,
+		"empty settings":   `{}`,
+		"empty pod id":     `{"PodID":"","LimitInBytes":134217728}`,
+		"omitted limit":    `{"PodID":"pod1"}`,
+		"null limit":       `{"PodID":"pod1","LimitInBytes":null}`,
+		"zero limit":       `{"PodID":"pod1","LimitInBytes":0}`,
+		"unlimited limit":  `{"PodID":"pod1","LimitInBytes":-1}`,
+		"string limit":     `{"PodID":"pod1","LimitInBytes":"1"}`,
+		"unknown field":    `{"PodID":"pod1","LimitInBytes":134217728,"Linux":{"cpu":{"quota":1}}}`,
+		"wrong shape":      `[]`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			host, cgroups := newHostWithPods(t, "pod1")
+			if err := handle(host, message(settings)); err == nil {
+				t.Fatalf("settings %q accepted", settings)
+			}
+			if n := len(cgroups["pod1"].calls); n != 0 {
+				t.Fatalf("pod1 cgroup Update called %d times on rejected request", n)
+			}
+		})
+	}
+}
+
+func TestModifyHostSettingsPodMemoryLimitFailureThenRetry(t *testing.T) {
+	host, cgroups := newHostWithPods(t, "pod1", "pod2")
+	updateErr := errors.New("cgroup write failed")
+	cgroups["pod1"].updateErr = updateErr
+	req := podMemoryLimitRequest(guestrequest.RequestTypeUpdate, podMemoryLimit("pod1", 134217728))
+
+	if err := host.modifyHostSettings(context.Background(), UVMContainerID, req); !errors.Is(err, updateErr) {
+		t.Fatalf("modifyHostSettings returned %v, want wrapped %v", err, updateErr)
+	}
+	if cgroups["pod1"].limit != -1 || len(cgroups["pod2"].calls) != 0 || cgroups["pod2"].limit != -1 {
+		t.Fatalf("state changed after failure: pod1 limit=%d, pod2 calls=%d limit=%d",
+			cgroups["pod1"].limit, len(cgroups["pod2"].calls), cgroups["pod2"].limit)
+	}
+	if _, ok := host.pods["pod1"]; !ok {
+		t.Fatal("pod1 unregistered after failed update")
+	}
+
+	cgroups["pod1"].updateErr = nil
+	if err := host.modifyHostSettings(context.Background(), UVMContainerID, req); err != nil {
+		t.Fatalf("retry returned %v", err)
+	}
+	if cgroups["pod1"].limit != 134217728 || cgroups["pod1"].updates != 1 || len(cgroups["pod2"].calls) != 0 {
+		t.Fatalf("after retry: pod1 limit=%d updates=%d, pod2 calls=%d",
+			cgroups["pod1"].limit, cgroups["pod1"].updates, len(cgroups["pod2"].calls))
 	}
 }
 

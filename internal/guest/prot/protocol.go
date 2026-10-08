@@ -4,6 +4,7 @@
 package prot
 
 import (
+	"bytes"
 	"encoding/json"
 	"strconv"
 
@@ -12,6 +13,7 @@ import (
 	"github.com/pkg/errors"
 
 	"github.com/Microsoft/hcsshim/internal/bridgeutils/commonutils"
+	"github.com/Microsoft/hcsshim/internal/bridgeutils/gcserr"
 	hcsschema "github.com/Microsoft/hcsshim/internal/hcs/schema2"
 	"github.com/Microsoft/hcsshim/internal/protocol/guestrequest"
 	"github.com/Microsoft/hcsshim/internal/protocol/guestresource"
@@ -584,6 +586,15 @@ func UnmarshalContainerModifySettings(b []byte) (*containerModifySettings, error
 		msr.Settings = fragment
 	case guestresource.ResourceTypePodCgroupMemoryLimit:
 		msr.Settings = nil
+	case guestresource.ResourceTypePodMemoryLimit:
+		pm := &guestresource.LCOWPodMemoryLimit{}
+		d := json.NewDecoder(bytes.NewReader(msrRawSettings))
+		d.DisallowUnknownFields()
+		if err := d.Decode(pm); err != nil {
+			return &request, errors.Wrap(gcserr.WrapHresult(err, gcserr.HrVmcomputeInvalidJSON),
+				"failed to unmarshal settings as LCOWPodMemoryLimit")
+		}
+		msr.Settings = pm
 	default:
 		return &request, errors.Errorf("invalid ResourceType '%s'", msr.ResourceType)
 	}
