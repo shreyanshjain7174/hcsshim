@@ -664,6 +664,30 @@ func TestShutdownSandbox_TerminateErrorSwallowed(t *testing.T) {
 	}
 }
 
+// TestShutdownSandbox_AfterFailedCreate verifies that containerd's cleanup
+// ShutdownSandbox after a failed CreateSandbox still exits the shim even
+// though no sandboxID was recorded.
+func TestShutdownSandbox_AfterFailedCreate(t *testing.T) {
+	t.Parallel()
+	svc, mockCtrl := newTestService(t)
+	shutdownCtx, sd := shutdown.WithShutdown(context.Background())
+	svc.shutdown = sd
+
+	mockCtrl.EXPECT().State().Return(vm.StateNotCreated)
+	mockCtrl.EXPECT().TerminateVM(gomock.Any()).Return(nil).AnyTimes()
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	if _, err := svc.shutdownSandboxInternal(reqCtx, &sandboxsvc.ShutdownSandboxRequest{SandboxID: "never-created"}); err != nil {
+		t.Fatalf("shutdown after failed create: %v", err)
+	}
+	cancel()
+	select {
+	case <-shutdownCtx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("shim shutdown was not triggered")
+	}
+}
+
 // ─── sandboxMetricsInternal tests ─────────────────────────────────────────
 
 // TestSandboxMetrics_Success verifies the happy-path: Stats is fetched,
