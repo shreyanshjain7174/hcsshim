@@ -19,9 +19,9 @@ scoped to an individual resource concern:
 
 All interfaces are implemented by [UtilityVM].
 
-Presently this package is tightly coupled with the HCS backend and only runs
-HCS-backed UVMs. It does not store host or guest side state; that is the
-responsibility of the orchestration layer above it.
+It wraps HCS compute systems and, through [WrapCreatedSystem] and the [ComputeSystem]
+interface, a system created outside this package. It does not store host or guest side
+state; that is the responsibility of the orchestration layer above it.
 
 # Creating a UVM
 

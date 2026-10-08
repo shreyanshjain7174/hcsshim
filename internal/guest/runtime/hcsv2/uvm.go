@@ -1061,9 +1061,38 @@ func (h *Host) modifyHostSettings(ctx context.Context, containerID string, req *
 		default:
 			return newInvalidRequestTypeError(req.RequestType)
 		}
+	case guestresource.ResourceTypePodMemoryLimit:
+		if req.RequestType != guestrequest.RequestTypeUpdate {
+			return newInvalidRequestTypeError(req.RequestType)
+		}
+		pm, ok := req.Settings.(*guestresource.LCOWPodMemoryLimit)
+		if !ok {
+			return errors.Errorf("the request's settings are not of type LCOWPodMemoryLimit: %T", req.Settings)
+		}
+		if err := pm.Validate(); err != nil {
+			return errors.Wrap(err, "invalid pod memory limit request")
+		}
+		return h.updatePodMemoryLimit(pm.PodID, *pm.LimitInBytes)
 	default:
 		return errors.Errorf("the ResourceType %q is not supported for UVM", req.ResourceType)
 	}
+}
+
+// updatePodMemoryLimit writes only Memory.Limit to the cgroup of the registered pod podID.
+func (h *Host) updatePodMemoryLimit(podID string, limitInBytes int64) error {
+	// Held across the write: pod creation and RemoveContainer's cgroup Delete are serialized only by this lock.
+	h.containersMutex.Lock()
+	defer h.containersMutex.Unlock()
+
+	p, ok := h.pods[podID]
+	if !ok {
+		return errors.Errorf("pod %q does not exist", podID)
+	}
+	resources := &specs.LinuxResources{Memory: &specs.LinuxMemory{Limit: &limitInBytes}}
+	if err := p.cgroupControl.Update(resources); err != nil {
+		return errors.Wrapf(err, "failed to update memory limit for pod %q", podID)
+	}
+	return nil
 }
 
 func (h *Host) modifyContainerSettings(ctx context.Context, containerID string, req *guestrequest.ModificationRequest) error {

@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/Microsoft/hcsshim/internal/controller/linuxcontainer"
+	"github.com/Microsoft/hcsshim/internal/protocol/guestresource"
 )
 
 // Controller manages the lifecycle of a single pod inside a Utility VM.
@@ -122,6 +123,22 @@ func (c *Controller) NewContainer(ctx context.Context, containerID string) (*lin
 	)
 	c.containers[containerID] = containerCtrl
 	return containerCtrl, nil
+}
+
+// UpdateMemoryLimit sets the memory limit of this pod's cgroup in the guest.
+func (c *Controller) UpdateMemoryLimit(ctx context.Context, limitInBytes int64) error {
+	if err := guestresource.ValidatePodMemoryLimitInBytes(limitInBytes); err != nil {
+		return err
+	}
+
+	// Held across the RPC so migration cannot change gcsPodID or unbind the VM mid-update.
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.isMigrating {
+		return fmt.Errorf("pod %q is migrating; call Resume first", c.podID)
+	}
+	return c.vm.Guest().UpdatePodMemoryLimit(ctx, c.gcsPodID, limitInBytes)
 }
 
 // ListContainers returns a snapshot of all live container controllers in

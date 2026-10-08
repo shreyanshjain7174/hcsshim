@@ -16,13 +16,15 @@ import (
 	"github.com/Microsoft/hcsshim/internal/vm/vmmanager"
 	"github.com/Microsoft/hcsshim/internal/vm/vmutils"
 
-	"github.com/Microsoft/go-winio"
 	"golang.org/x/sync/errgroup"
 )
 
 // platformControllers holds platform-specific sub-controllers embedded in [Controller].
 // For LCOW, this includes the Plan9 file share controller.
 type platformControllers struct {
+	// A nil directCreate selects the HCS cold-create path.
+	directCreate DirectCreateFunc
+
 	// plan9Controller manages Plan9 file share mounts for this VM.
 	plan9Controller *plan9.Controller
 
@@ -36,6 +38,16 @@ type platformControllers struct {
 	// nextBridgeID is the GCS bridge request-id floor restored from a
 	// migration snapshot; consumed by [Controller.Resume].
 	nextBridgeID int64
+}
+
+// NewWithDirectCreate creates an LCOW controller that must use the supplied direct VM creator.
+func NewWithDirectCreate(create DirectCreateFunc) (*Controller, error) {
+	if create == nil {
+		return nil, fmt.Errorf("direct VM creator is required")
+	}
+	c := New()
+	c.directCreate = create
+	return c, nil
 }
 
 // SandboxOptions returns the sandbox options stored during CreateVM.
@@ -137,10 +149,7 @@ func (c *Controller) Plan9Controller() *plan9.Controller {
 // random data to the Linux init process when it connects.
 func (c *Controller) setupEntropyListener(ctx context.Context, group *errgroup.Group) error {
 	// The Linux guest will connect to this port during init to receive entropy.
-	entropyConn, err := winio.ListenHvsock(&winio.HvsockAddr{
-		VMID:      c.uvm.RuntimeID(),
-		ServiceID: winio.VsockServiceID(vmutils.LinuxEntropyVsockPort),
-	})
+	entropyConn, err := c.transport.ListenPort(vmutils.LinuxEntropyVsockPort)
 	if err != nil {
 		return fmt.Errorf("failed to listen on hvSocket for entropy: %w", err)
 	}
@@ -183,10 +192,7 @@ func (c *Controller) setupLoggingListener(ctx context.Context, group *errgroup.G
 	done := c.logOutputDone
 
 	// The GCS will connect to this port to stream log output.
-	logConn, err := winio.ListenHvsock(&winio.HvsockAddr{
-		VMID:      c.uvm.RuntimeID(),
-		ServiceID: winio.VsockServiceID(vmutils.LinuxLogVsockPort),
-	})
+	logConn, err := c.transport.ListenPort(vmutils.LinuxLogVsockPort)
 	if err != nil {
 		close(done)
 		return fmt.Errorf("failed to listen on hvSocket for logs: %w", err)

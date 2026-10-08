@@ -37,7 +37,39 @@ const (
 	// that signals when the child "serve" process is ready to accept ttrpc connections.
 	// It is formatted with the namespace and shim ID (e.g. "<ns>-<id>").
 	serveReadyEventNameFormat = "%s-%s"
+	serveReadyTimeout         = 30 * time.Second
+	serveReadyPollInterval    = 25 * time.Millisecond
 )
+
+func waitForServeReady(ctx context.Context, handle windows.Handle, childExited <-chan error) error {
+	ctx, cancel := context.WithTimeout(ctx, serveReadyTimeout)
+	defer cancel()
+
+	ticker := time.NewTicker(serveReadyPollInterval)
+	defer ticker.Stop()
+	for {
+		result, err := windows.WaitForSingleObject(handle, 0)
+		if err != nil {
+			return fmt.Errorf("failed waiting for the shim serve-ready event: %w", err)
+		}
+		if result == windows.WAIT_OBJECT_0 {
+			return nil
+		} else if result != uint32(windows.WAIT_TIMEOUT) {
+			return fmt.Errorf("unexpected shim serve-ready wait result 0x%x", result)
+		}
+
+		select {
+		case err := <-childExited:
+			if err == nil {
+				return errors.New("shim serve child exited before signalling readiness")
+			}
+			return fmt.Errorf("shim serve child exited before signalling readiness: %w", err)
+		case <-ctx.Done():
+			return fmt.Errorf("timed out waiting for the shim serve-ready event: %w", ctx.Err())
+		case <-ticker.C:
+		}
+	}
+}
 
 // shimManager implements the shim.Manager interface. It is the entry-point
 // used by the containerd shim runner to create and destroy shim instances.
@@ -142,7 +174,10 @@ func (m *shimManager) Start(ctx context.Context, id string, opts shim.StartOpts)
 
 	// Create an event on which we will listen to know when the shim is ready to accept connections.
 	// The child serve process signals this event once its TTRPC server is fully initialized.
-	eventName, _ := windows.UTF16PtrFromString(fmt.Sprintf(serveReadyEventNameFormat, ns, id))
+	eventName, err := windows.UTF16PtrFromString(fmt.Sprintf(serveReadyEventNameFormat, ns, id))
+	if err != nil {
+		return params, fmt.Errorf("failed to encode serve-ready event name: %w", err)
+	}
 
 	// Create the named event
 	handle, err := windows.CreateEvent(nil, 0, 0, eventName)
@@ -165,6 +200,10 @@ func (m *shimManager) Start(ctx context.Context, id string, opts shim.StartOpts)
 	if err = cmd.Start(); err != nil {
 		return params, err
 	}
+	childExited := make(chan error, 1)
+	go func() {
+		childExited <- cmd.Wait()
+	}()
 
 	defer func() {
 		if retErr != nil {
@@ -172,8 +211,12 @@ func (m *shimManager) Start(ctx context.Context, id string, opts shim.StartOpts)
 		}
 	}()
 
-	// Block until the child signals the event.
-	_, _ = windows.WaitForSingleObject(handle, windows.INFINITE)
+	if err := waitForServeReady(ctx, handle, childExited); err != nil {
+		if logBytes, readErr := limitedRead(filepath.Join(cwd, "panic.log"), int64(memory.MiB)); readErr == nil && len(logBytes) != 0 {
+			return params, fmt.Errorf("%w (serve child stderr: %s)", err, string(logBytes))
+		}
+		return params, err
+	}
 
 	params.Address = address
 	return params, nil
@@ -181,10 +224,9 @@ func (m *shimManager) Start(ctx context.Context, id string, opts shim.StartOpts)
 
 // Stop tears down a running shim instance identified by id.
 // It reads and logs any panic messages written to panic.log, then tries to
-// terminate the associated HCS compute system and waits up to 30 seconds for
-// it to exit.
+// terminate an associated HCS compute system, if present.
 func (m *shimManager) Stop(ctx context.Context, id string) (resp shim.StopStatus, err error) {
-	ctx, span := ot.StartSpan(ctx, "delete")
+	ctx, span := ot.StartSpan(context.WithoutCancel(ctx), "delete")
 	defer span.End()
 	defer func() { ot.SetSpanStatus(span, err) }()
 

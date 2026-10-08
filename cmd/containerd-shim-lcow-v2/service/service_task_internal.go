@@ -13,11 +13,9 @@ import (
 	"github.com/Microsoft/hcsshim/internal/controller/pod"
 	"github.com/Microsoft/hcsshim/internal/controller/process"
 	"github.com/Microsoft/hcsshim/internal/controller/vm"
-	hcsschema "github.com/Microsoft/hcsshim/internal/hcs/schema2"
 	hcs "github.com/Microsoft/hcsshim/internal/hcs/v2"
 	"github.com/Microsoft/hcsshim/internal/log"
 	"github.com/Microsoft/hcsshim/internal/logfields"
-	"github.com/Microsoft/hcsshim/internal/memory"
 	"github.com/Microsoft/hcsshim/internal/oci"
 	"github.com/Microsoft/hcsshim/internal/protocol/guestresource"
 	"github.com/Microsoft/hcsshim/pkg/annotations"
@@ -560,10 +558,10 @@ func (s *Service) updateInternal(ctx context.Context, request *task.UpdateTaskRe
 	}
 
 	// Check if the ID in request matches any podID in podController map.
-	// If so, this is a pod-level update — call the appropriate VM controller API.
-	if _, ok := s.getPodController(request.ID); ok {
-		if err := s.updateVMResources(ctx, resources, request.Annotations); err != nil {
-			return nil, fmt.Errorf("failed to update VM resources for pod %s: %w", request.ID, err)
+	// If so, this is a pod-level update.
+	if podCtrl, ok := s.getPodController(request.ID); ok {
+		if err := s.updatePodResources(ctx, podCtrl, resources, request.Annotations); err != nil {
+			return nil, fmt.Errorf("failed to update resources for pod %s: %w", request.ID, err)
 		}
 		return &emptypb.Empty{}, nil
 	}
@@ -581,8 +579,10 @@ func (s *Service) updateInternal(ctx context.Context, request *task.UpdateTaskRe
 	return &emptypb.Empty{}, nil
 }
 
-// updateVMResources dispatches resource updates to the appropriate VM controller APIs.
-func (s *Service) updateVMResources(ctx context.Context, resources interface{}, annots map[string]string) error {
+// updatePodResources dispatches a pod-level resource update. The only
+// supported Linux update is the pod's own memory limit, which never touches
+// the VM shared by other pods.
+func (s *Service) updatePodResources(ctx context.Context, podCtrl *pod.Controller, resources interface{}, annots map[string]string) error {
 	switch res := resources.(type) {
 	case *ctrdtaskapi.PolicyFragment:
 		return s.vmController.UpdatePolicyFragment(ctx, guestresource.SecurityPolicyFragment{
@@ -590,39 +590,58 @@ func (s *Service) updateVMResources(ctx context.Context, resources interface{}, 
 			MediaType: res.MediaType,
 		})
 	case *specs.LinuxResources:
-		// Update memory if specified.
-		if res.Memory != nil && res.Memory.Limit != nil {
-			requestedSizeInMB := uint64(*res.Memory.Limit) / memory.MiB
-			if err := s.vmController.UpdateMemory(ctx, requestedSizeInMB); err != nil {
-				return fmt.Errorf("failed to update vm memory: %w", err)
-			}
+		if _, ok := annots[annotations.CPUGroupID]; ok {
+			return fmt.Errorf("annotation %s changes the shared VM and is not supported on a pod update: %w",
+				annotations.CPUGroupID, errdefs.ErrInvalidArgument)
 		}
-
-		// Translate OCI CPU knobs to HCS processor limits and update if specified.
-		if res.CPU != nil {
-			processorLimits := &hcsschema.ProcessorLimits{}
-			if res.CPU.Quota != nil {
-				processorLimits.Limit = uint64(*res.CPU.Quota)
-			}
-			if res.CPU.Shares != nil {
-				processorLimits.Weight = uint64(*res.CPU.Shares)
-			}
-			if err := s.vmController.UpdateCPU(ctx, processorLimits); err != nil {
-				return fmt.Errorf("failed to update vm cpu limits: %w", err)
-			}
+		limit, err := podMemoryLimitFromResources(res)
+		if err != nil {
+			return err
 		}
-
-		// Update CPU group membership if the corresponding annotation is present.
-		if cpuGroupID, ok := annots[annotations.CPUGroupID]; ok {
-			if err := s.vmController.UpdateCPUGroup(ctx, cpuGroupID); err != nil {
-				return fmt.Errorf("failed to update vm cpu group: %w", err)
-			}
-		}
-
-		return nil
+		return podCtrl.UpdateMemoryLimit(ctx, limit)
 	default:
 		return fmt.Errorf("unsupported resource type %T: %w", resources, errdefs.ErrInvalidArgument)
 	}
+}
+
+// podMemoryLimitFromResources returns the memory limit of a pod update that
+// sets Memory.Limit and nothing else.
+func podMemoryLimitFromResources(res *specs.LinuxResources) (int64, error) {
+	var unsupported []string
+	reject := func(set bool, name string) {
+		if set {
+			unsupported = append(unsupported, name)
+		}
+	}
+	reject(len(res.Devices) > 0, "devices")
+	reject(res.CPU != nil, "cpu")
+	reject(res.Pids != nil, "pids")
+	reject(res.BlockIO != nil, "blockIO")
+	reject(len(res.HugepageLimits) > 0, "hugepageLimits")
+	reject(res.Network != nil, "network")
+	reject(len(res.Rdma) > 0, "rdma")
+	reject(len(res.Unified) > 0, "unified")
+	if m := res.Memory; m != nil {
+		reject(m.Reservation != nil, "memory.reservation")
+		reject(m.Swap != nil, "memory.swap")
+		reject(m.Kernel != nil, "memory.kernel") //nolint:staticcheck // Reject the deprecated field rather than silently ignore it.
+		reject(m.KernelTCP != nil, "memory.kernelTCP")
+		reject(m.Swappiness != nil, "memory.swappiness")
+		reject(m.DisableOOMKiller != nil, "memory.disableOOMKiller")
+		reject(m.UseHierarchy != nil, "memory.useHierarchy")
+		reject(m.CheckBeforeUpdate != nil, "memory.checkBeforeUpdate")
+	}
+	if len(unsupported) > 0 {
+		return 0, fmt.Errorf("pod update sets unsupported resources %v; only memory.limit is supported: %w",
+			unsupported, errdefs.ErrInvalidArgument)
+	}
+	if res.Memory == nil || res.Memory.Limit == nil {
+		return 0, fmt.Errorf("pod update must set memory.limit: %w", errdefs.ErrInvalidArgument)
+	}
+	if err := guestresource.ValidatePodMemoryLimitInBytes(*res.Memory.Limit); err != nil {
+		return 0, fmt.Errorf("%w: %w", err, errdefs.ErrInvalidArgument)
+	}
+	return *res.Memory.Limit, nil
 }
 
 // waitInternal blocks until the specified process exits and returns its exit status.
@@ -707,7 +726,7 @@ func (s *Service) shutdownInternal(ctx context.Context, request *task.ShutdownRe
 
 	// Simply log the call for debugging purposes and return.
 	log.G(ctx).WithFields(logrus.Fields{
-		logfields.SandboxID: s.sandboxID,
+		logfields.SandboxID: s.getSandboxID(),
 		logfields.ID:        request.ID,
 	}).Debug("ignoring TaskService.Shutdown request")
 
