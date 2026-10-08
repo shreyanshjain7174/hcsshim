@@ -707,7 +707,7 @@ func (s *Service) shutdownInternal(ctx context.Context, request *task.ShutdownRe
 
 	// Simply log the call for debugging purposes and return.
 	log.G(ctx).WithFields(logrus.Fields{
-		logfields.SandboxID: s.sandboxID,
+		logfields.SandboxID: s.getSandboxID(),
 		logfields.ID:        request.ID,
 	}).Debug("ignoring TaskService.Shutdown request")
 

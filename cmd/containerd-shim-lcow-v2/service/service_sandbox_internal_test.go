@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -664,6 +665,30 @@ func TestShutdownSandbox_TerminateErrorSwallowed(t *testing.T) {
 	}
 }
 
+// TestShutdownSandbox_AfterFailedCreate verifies that containerd's cleanup
+// ShutdownSandbox after a failed CreateSandbox still exits the shim even
+// though no sandboxID was recorded.
+func TestShutdownSandbox_AfterFailedCreate(t *testing.T) {
+	t.Parallel()
+	svc, mockCtrl := newTestService(t)
+	shutdownCtx, sd := shutdown.WithShutdown(context.Background())
+	svc.shutdown = sd
+
+	mockCtrl.EXPECT().State().Return(vm.StateNotCreated)
+	mockCtrl.EXPECT().TerminateVM(gomock.Any()).Return(nil).AnyTimes()
+
+	reqCtx, cancel := context.WithCancel(context.Background())
+	if _, err := svc.shutdownSandboxInternal(reqCtx, &sandboxsvc.ShutdownSandboxRequest{SandboxID: "never-created"}); err != nil {
+		t.Fatalf("shutdown after failed create: %v", err)
+	}
+	cancel()
+	select {
+	case <-shutdownCtx.Done():
+	case <-time.After(5 * time.Second):
+		t.Fatal("shim shutdown was not triggered")
+	}
+}
+
 // ─── sandboxMetricsInternal tests ─────────────────────────────────────────
 
 // TestSandboxMetrics_Success verifies the happy-path: Stats is fetched,
@@ -701,5 +726,47 @@ func TestSandboxMetrics_StatsFailure(t *testing.T) {
 	}
 	if !errors.Is(err, errVMStats) {
 		t.Errorf("expected error to wrap errVMStats, got %v", err)
+	}
+}
+
+// TestShutdownSandbox_ConcurrentWithCreate verifies that ShutdownSandbox can
+// read the sandbox ID while CreateSandbox is recording it. containerd sends
+// ShutdownSandbox to reap a shim whose create is still running or has failed,
+// so the read must not depend on the create's lock. Run with -race.
+func TestShutdownSandbox_ConcurrentWithCreate(t *testing.T) {
+	t.Parallel()
+
+	// The mock controller's own mutex orders some interleavings, so repeat
+	// with fresh state until the detector sees the write before the read.
+	for i := 0; i < 200; i++ {
+		svc, mockCtrl := newTestService(t)
+		bundleDir := t.TempDir()
+		writeMiniConfigJSON(t, bundleDir)
+
+		mockCtrl.EXPECT().CreateVM(gomock.Any(), gomock.Any()).Return(nil)
+		mockCtrl.EXPECT().State().Return(vm.StateTerminated).AnyTimes()
+
+		start := make(chan struct{})
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, _ = svc.createSandboxInternal(context.Background(), &sandboxsvc.CreateSandboxRequest{
+				SandboxID:  "test-sandbox",
+				BundlePath: bundleDir,
+			})
+		}()
+		go func() {
+			defer wg.Done()
+			<-start
+			// Sleep, not a sync primitive, so the race detector sees no ordering edge.
+			time.Sleep(2 * time.Millisecond)
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel()
+			_, _ = svc.shutdownSandboxInternal(ctx, &sandboxsvc.ShutdownSandboxRequest{SandboxID: "other-sandbox"})
+		}()
+		close(start)
+		wg.Wait()
 	}
 }

@@ -42,7 +42,11 @@ type Service struct {
 
 	// sandboxID is the unique identifier for the sandbox managed by this Service instance.
 	// For LCOW shim, sandboxID corresponds 1-1 with the UtilityVM managed by the shim.
+	// Access it through getSandboxID and setSandboxID.
 	sandboxID string
+	// idMu guards sandboxID on its own, since mu is held for the whole VM create
+	// and ShutdownSandbox must still be able to read the ID while that runs.
+	idMu sync.Mutex
 
 	// vmController is responsible for managing the lifecycle of the underlying
 	// utility VM.
@@ -67,11 +71,15 @@ type Service struct {
 var _ shim.TTRPCService = (*Service)(nil)
 
 // NewService creates a new instance of the Service with the shared state.
-func NewService(ctx context.Context, eventsPublisher shim.Publisher, sd shutdown.Service) *Service {
+func NewService(ctx context.Context, eventsPublisher shim.Publisher, sd shutdown.Service) (*Service, error) {
+	vmCtrl, err := newVMController()
+	if err != nil {
+		return nil, err
+	}
 	svc := &Service{
 		publisher:           eventsPublisher,
 		events:              make(chan interface{}, 128), // Buffered channel for events
-		vmController:        vm.New(),
+		vmController:        vmCtrl,
 		podControllers:      make(map[string]*pod.Controller),
 		containerPodMapping: make(map[string]string),
 		migrationController: migration.New(),
@@ -93,7 +101,7 @@ func NewService(ctx context.Context, eventsPublisher shim.Publisher, sd shutdown
 		return nil
 	})
 
-	return svc
+	return svc, nil
 }
 
 // RegisterTTRPC registers the Task, Sandbox, and ShimDiag TTRPC services on
@@ -124,7 +132,19 @@ func (s *Service) ensureMigrationIdle() error {
 
 // SandboxID returns the unique identifier for the sandbox managed by this Service.
 func (s *Service) SandboxID() string {
+	return s.getSandboxID()
+}
+
+func (s *Service) getSandboxID() string {
+	s.idMu.Lock()
+	defer s.idMu.Unlock()
 	return s.sandboxID
+}
+
+func (s *Service) setSandboxID(id string) {
+	s.idMu.Lock()
+	defer s.idMu.Unlock()
+	s.sandboxID = id
 }
 
 // send enqueues an event onto the internal events channel so that it can be
