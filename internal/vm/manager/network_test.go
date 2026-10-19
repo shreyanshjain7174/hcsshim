@@ -21,11 +21,8 @@ import (
 	"github.com/Microsoft/hcsshim/internal/vmservice"
 
 	"github.com/Microsoft/go-winio/pkg/guid"
-	"github.com/containerd/errdefs"
-	"github.com/containerd/errdefs/pkg/errgrpc"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -380,12 +377,13 @@ func TestSystemModifySCSIUnchangedAndTouchesNoHCN(t *testing.T) {
 	}
 }
 
-func TestSystemModifyPlan9ReturnsUnimplementedWithoutRPC(t *testing.T) {
+func TestSystemModifyPlan9SendsOneVirtioFSShareRPC(t *testing.T) {
 	tests := []struct {
 		name        string
 		requestType guestrequest.RequestType
 		settings    hcsschema.Plan9Share
 		guest       guestresource.LCOWMappedDirectory
+		want        vmservice.ModifyType
 	}{
 		{
 			name:        "Add",
@@ -403,6 +401,7 @@ func TestSystemModifyPlan9ReturnsUnimplementedWithoutRPC(t *testing.T) {
 				Port:      vmutils.Plan9Port,
 				ReadOnly:  true,
 			},
+			want: vmservice.ModifyType_ADD,
 		},
 		{
 			name:        "Remove",
@@ -417,6 +416,7 @@ func TestSystemModifyPlan9ReturnsUnimplementedWithoutRPC(t *testing.T) {
 				ShareName: "0",
 				Port:      vmutils.Plan9Port,
 			},
+			want: vmservice.ModifyType_REMOVE,
 		},
 	}
 
@@ -436,20 +436,74 @@ func TestSystemModifyPlan9ReturnsUnimplementedWithoutRPC(t *testing.T) {
 				},
 			}
 
-			err := sys.Modify(context.Background(), req)
-			if !errors.Is(err, ErrModifyNotSupported) || !errors.Is(err, errdefs.ErrNotImplemented) {
-				t.Fatalf("Modify(Plan9 %s) = %v, want ErrModifyNotSupported wrapping ErrNotImplemented", test.name, err)
+			if err := sys.Modify(context.Background(), req); err != nil {
+				t.Fatalf("Modify(Plan9 %s): %v", test.name, err)
 			}
-			if got := status.Code(errgrpc.ToGRPC(err)); got != codes.Unimplemented {
-				t.Fatalf("Modify(Plan9 %s) gRPC code = %s, want %s", test.name, got, codes.Unimplemented)
-			}
-			if got := client.totalCallCount(); got != 0 {
-				t.Fatalf("Modify(Plan9 %s) issued %d vmservice RPCs, want 0", test.name, got)
+			calls := client.calls()
+			if len(calls) != 1 || client.totalCallCount() != 1 || calls[0].GetType() != test.want || calls[0].GetVirtiofsShare().GetName() != "0" {
+				t.Fatalf("Modify(Plan9 %s) calls = %+v, want one virtio-fs share request", test.name, calls)
 			}
 			if binder.bindCallCount() != 0 || binder.unbindCallCount() != 0 {
 				t.Fatalf("Plan9 %s touched HCN: bind=%d unbind=%d", test.name, binder.bindCallCount(), binder.unbindCallCount())
 			}
 		})
+	}
+}
+
+func TestSystemModifyPlan9TranslatesToVirtioFSShare(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		rt    guestrequest.RequestType
+		share hcsschema.Plan9Share
+		want  *vmservice.VirtioFSShare
+		typ   vmservice.ModifyType
+	}{
+		{
+			name:  "add read-only restricted",
+			rt:    guestrequest.RequestTypeAdd,
+			share: hcsschema.Plan9Share{Name: "4", Path: `C:\d\`, Flags: hcsschema.Plan9ShareFlagsReadOnly | hcsschema.Plan9ShareFlagsRestrictFileAccess, AllowedFiles: []string{"f.txt"}},
+			want:  &vmservice.VirtioFSShare{Name: "4", RootPath: `C:\d\`, ReadOnly: true, AllowedNames: []string{"f.txt"}},
+			typ:   vmservice.ModifyType_ADD,
+		},
+		{
+			name:  "add writable",
+			rt:    guestrequest.RequestTypeAdd,
+			share: hcsschema.Plan9Share{Name: "5", Path: `C:\w`, Flags: hcsschema.Plan9ShareFlagsLinuxMetadata},
+			want:  &vmservice.VirtioFSShare{Name: "5", RootPath: `C:\w`},
+			typ:   vmservice.ModifyType_ADD,
+		},
+		{
+			name:  "remove",
+			rt:    guestrequest.RequestTypeRemove,
+			share: hcsschema.Plan9Share{Name: "5", Path: `C:\w`},
+			want:  &vmservice.VirtioFSShare{Name: "5"},
+			typ:   vmservice.ModifyType_REMOVE,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := BuildModifyResourceRequest(&hcsschema.ModifySettingRequest{
+				RequestType:  tc.rt,
+				ResourcePath: resourcepaths.Plan9ShareResourcePath,
+				Settings:     tc.share,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.GetType() != tc.typ || !proto.Equal(got.GetVirtiofsShare(), tc.want) {
+				t.Fatalf("got %v", got)
+			}
+		})
+	}
+}
+
+func TestSystemModifyPlan9RejectsRestrictWithoutAllowedFiles(t *testing.T) {
+	_, err := BuildModifyResourceRequest(&hcsschema.ModifySettingRequest{
+		RequestType:  guestrequest.RequestTypeAdd,
+		ResourcePath: resourcepaths.Plan9ShareResourcePath,
+		Settings:     hcsschema.Plan9Share{Name: "1", Path: `C:\d`, Flags: hcsschema.Plan9ShareFlagsRestrictFileAccess},
+	})
+	if !errors.Is(err, errMalformedModifyRequest) {
+		t.Fatalf("err = %v", err)
 	}
 }
 

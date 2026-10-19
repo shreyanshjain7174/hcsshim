@@ -783,9 +783,10 @@ var ErrModifyNotSupported = fmt.Errorf("this ModifySettingRequest has no vmservi
 var errMalformedModifyRequest = errors.New("no usable ModifySettingRequest was supplied to the openvmm modify translation")
 
 // BuildModifyResourceRequest translates one hot-plug ModifySettingRequest into the
-// vmservice request that performs it. Only a SCSI add or remove translates; a SCSI update
-// and every other non-network path (vPCI, vPMem, plan9, VSMB, memory, processor, ...) is a
-// named not-implemented error with a nil request; System.Modify handles network paths before
+// vmservice request that performs it. A SCSI add or remove and a Plan9 share add or remove
+// translate; Plan9 shares become children of the aggregate virtio-fs device. A SCSI update
+// and every other non-network path (vPCI, vPMem, VSMB, memory, processor, ...) is a named
+// not-implemented error with a nil request; System.Modify handles network paths before
 // this. It never returns a partial request beside an error.
 func BuildModifyResourceRequest(req *hcsschema.ModifySettingRequest) (*vmservice.ModifyResourceRequest, error) {
 	if req == nil {
@@ -793,6 +794,9 @@ func BuildModifyResourceRequest(req *hcsschema.ModifySettingRequest) (*vmservice
 	}
 	if req.ResourcePath == "" {
 		return nil, fmt.Errorf("ModifySettingRequest.ResourcePath is empty: %w", errMalformedModifyRequest)
+	}
+	if req.ResourcePath == resourcepaths.Plan9ShareResourcePath {
+		return buildVirtioFSShareRequest(req)
 	}
 	if !isSCSIResourcePath(req.ResourcePath) {
 		return nil, fmt.Errorf("ModifySettingRequest.ResourcePath %q has no vmservice modify translation: %w", req.ResourcePath, ErrModifyNotSupported)
@@ -818,6 +822,51 @@ func BuildModifyResourceRequest(req *hcsschema.ModifySettingRequest) (*vmservice
 		}, nil
 	default:
 		return nil, fmt.Errorf("RequestType %q on SCSI resource path %q is not supported: %w", req.RequestType, req.ResourcePath, ErrModifyNotSupported)
+	}
+}
+
+// buildVirtioFSShareRequest maps a Plan9 share request onto a child of the aggregate virtio-fs device.
+func buildVirtioFSShareRequest(req *hcsschema.ModifySettingRequest) (*vmservice.ModifyResourceRequest, error) {
+	var share hcsschema.Plan9Share
+	switch s := req.Settings.(type) {
+	case hcsschema.Plan9Share:
+		share = s
+	case *hcsschema.Plan9Share:
+		if s == nil {
+			return nil, fmt.Errorf("nil Plan9 share settings: %w", errMalformedModifyRequest)
+		}
+		share = *s
+	default:
+		return nil, fmt.Errorf("Plan9 share settings have type %T: %w", req.Settings, errMalformedModifyRequest)
+	}
+	if share.Name == "" {
+		return nil, fmt.Errorf("Plan9 share has no name: %w", errMalformedModifyRequest)
+	}
+
+	switch req.RequestType {
+	case guestrequest.RequestTypeAdd:
+		out := &vmservice.VirtioFSShare{
+			Name:     share.Name,
+			RootPath: share.Path,
+			ReadOnly: share.Flags&hcsschema.Plan9ShareFlagsReadOnly != 0,
+		}
+		if share.Flags&hcsschema.Plan9ShareFlagsRestrictFileAccess != 0 {
+			if len(share.AllowedFiles) == 0 {
+				return nil, fmt.Errorf("restricted Plan9 share %s lists no files: %w", share.Name, errMalformedModifyRequest)
+			}
+			out.AllowedNames = share.AllowedFiles
+		}
+		return &vmservice.ModifyResourceRequest{
+			Type:     vmservice.ModifyType_ADD,
+			Resource: &vmservice.ModifyResourceRequest_VirtiofsShare{VirtiofsShare: out},
+		}, nil
+	case guestrequest.RequestTypeRemove:
+		return &vmservice.ModifyResourceRequest{
+			Type:     vmservice.ModifyType_REMOVE,
+			Resource: &vmservice.ModifyResourceRequest_VirtiofsShare{VirtiofsShare: &vmservice.VirtioFSShare{Name: share.Name}},
+		}, nil
+	default:
+		return nil, fmt.Errorf("RequestType %q on Plan9 share %s is not supported: %w", req.RequestType, share.Name, ErrModifyNotSupported)
 	}
 }
 

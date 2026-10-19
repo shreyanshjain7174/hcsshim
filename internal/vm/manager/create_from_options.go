@@ -19,6 +19,7 @@ import (
 	controllervm "github.com/Microsoft/hcsshim/internal/controller/vm"
 	"github.com/Microsoft/hcsshim/internal/oci"
 	"github.com/Microsoft/hcsshim/internal/processorinfo"
+	"github.com/Microsoft/hcsshim/internal/protocol/guestresource"
 	"github.com/Microsoft/hcsshim/internal/vm/vmutils"
 	"github.com/Microsoft/hcsshim/internal/vmservice"
 	"github.com/Microsoft/hcsshim/osversion"
@@ -116,13 +117,16 @@ func BuildCreateVMRequestFromOptions(
 			Config: &vmservice.VMConfig{
 				MemoryConfig:    &vmservice.MemoryConfig{MemoryMb: memorySize, AllowOvercommit: true},
 				ProcessorConfig: &vmservice.ProcessorConfig{ProcessorCount: cpuCount},
-				DevicesConfig: &vmservice.DevicesConfig{ScsiDisks: []*vmservice.SCSIDisk{{
-					Controller: 0,
-					Lun:        0,
-					HostPath:   rootFsFullPath,
-					Type:       vmservice.DiskType_SCSI_DISK_TYPE_VHD1,
-					ReadOnly:   true,
-				}}},
+				DevicesConfig: &vmservice.DevicesConfig{
+					ScsiDisks: []*vmservice.SCSIDisk{{
+						Controller: 0,
+						Lun:        0,
+						HostPath:   rootFsFullPath,
+						Type:       vmservice.DiskType_SCSI_DISK_TYPE_VHD1,
+						ReadOnly:   true,
+					}},
+					VirtiofsAggregate: &vmservice.VirtioFSAggregateConfig{Tag: guestresource.VirtioFSAggregateTag},
+				},
 				SerialConfig:   serial,
 				BootConfig:     &vmservice.VMConfig_DirectBoot{DirectBoot: boot},
 				HvsocketConfig: &vmservice.HVSocketConfig{Path: cfg.HybridVsockBase},
@@ -387,7 +391,6 @@ func buildKernelArgs(
 	hasConsole bool,
 	rootFsFile string,
 ) string {
-	vpciEnabled := oci.ParseAnnotationsBool(ctx, annotations, shimannotations.VPCIEnabled, false)
 	disableTimeSyncService := oci.ParseAnnotationsBool(ctx, annotations, shimannotations.DisableLCOWTimeSyncService, false)
 	writableOverlayDirs := oci.ParseAnnotationsBool(ctx, annotations, iannotations.WritableOverlayDirs, false)
 	processDumpLocation := oci.ParseAnnotationsString(annotations, shimannotations.ContainerProcessDumpLocation, "")
@@ -400,9 +403,6 @@ func buildKernelArgs(
 	}
 	if kernelBootOptions := oci.ParseAnnotationsString(annotations, shimannotations.KernelBootOptions, ""); kernelBootOptions != "" {
 		args = append(args, kernelBootOptions)
-	}
-	if !vpciEnabled {
-		args = append(args, "pci=off")
 	}
 	args = append(args, fmt.Sprintf("nr_cpus=%d", processorCount), "brd.rd_nr=0", "pmtmr=0")
 	args = append(args, "--", buildInitArgs(ctx, opts, annotations, writableOverlayDirs, disableTimeSyncService, processDumpLocation, rootFsFile, hasConsole))

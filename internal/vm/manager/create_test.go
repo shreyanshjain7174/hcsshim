@@ -12,6 +12,7 @@ import (
 
 	runhcsoptions "github.com/Microsoft/hcsshim/cmd/containerd-shim-runhcs-v1/options"
 	iannotations "github.com/Microsoft/hcsshim/internal/annotations"
+	"github.com/Microsoft/hcsshim/internal/protocol/guestresource"
 	"github.com/Microsoft/hcsshim/internal/vm/vmutils"
 	"github.com/Microsoft/hcsshim/internal/vmservice"
 	shimannotations "github.com/Microsoft/hcsshim/pkg/annotations"
@@ -120,6 +121,22 @@ func TestBuildCreateVMRequestWiresBootAndRootDisk(t *testing.T) {
 	}
 	if defaults.Config.GetProcessorConfig().GetProcessorCount() == 0 || defaults.Config.GetMemoryConfig().GetMemoryMb() != 1024 {
 		t.Fatalf("default resources = cpu=%d memory=%d", defaults.Config.GetProcessorConfig().GetProcessorCount(), defaults.Config.GetMemoryConfig().GetMemoryMb())
+	}
+}
+
+func TestCreateRequestAddsVirtioFSAggregateAndEnablesPCI(t *testing.T) {
+	req, _, _, err := BuildCreateVMRequestFromOptions(
+		context.Background(), defaultNativeOpts(newBootFiles(t)), &vmsandbox.Spec{}, nativeBuilderConfig(), "virtiofs",
+	)
+	if err != nil {
+		t.Fatalf("BuildCreateVMRequestFromOptions: %v", err)
+	}
+	agg := req.GetConfig().GetDevicesConfig().GetVirtiofsAggregate()
+	if agg.GetTag() != guestresource.VirtioFSAggregateTag {
+		t.Fatalf("virtiofs aggregate tag = %q", agg.GetTag())
+	}
+	if strings.Contains(req.GetConfig().GetDirectBoot().GetKernelCmdline(), "pci=off") {
+		t.Fatal("kernel command line must not disable PCI when the virtio-fs device is present")
 	}
 }
 
