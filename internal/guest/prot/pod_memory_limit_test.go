@@ -27,6 +27,22 @@ func TestUnmarshalContainerModifySettingsPodMemoryLimit(t *testing.T) {
 	}
 }
 
+func TestUnmarshalMappedVirtioFS(t *testing.T) {
+	raw := []byte(`{"Request":{"ResourceType":"MappedVirtioFS","RequestType":"Add","Settings":{"Tag":"hcsshim-shares","ShareName":"0","MountPath":"/run/mounts/plan9/0","ReadOnly":true}}}`)
+	req, err := UnmarshalContainerModifySettings(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	msr := req.Request.(*guestrequest.ModificationRequest)
+	got, ok := msr.Settings.(*guestresource.LCOWMappedVirtioFS)
+	if !ok {
+		t.Fatalf("Settings type %T, want *guestresource.LCOWMappedVirtioFS", msr.Settings)
+	}
+	if msr.ResourceType != guestresource.ResourceTypeMappedVirtioFS || got.ShareName != "0" || !got.ReadOnly || got.Tag != "hcsshim-shares" || got.MountPath != "/run/mounts/plan9/0" {
+		t.Fatalf("got %+v / %+v", msr, got)
+	}
+}
+
 func TestUnmarshalContainerModifySettingsPodMemoryLimitRejectsMalformed(t *testing.T) {
 	for name, settings := range map[string]string{
 		"unknown field":   `{"PodID":"pod1","LimitInBytes":134217728,"Linux":{"cpu":{"quota":1}}}`,

@@ -6,6 +6,7 @@ package storage
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/pkg/errors"
@@ -209,5 +210,67 @@ func Test_UnmountAllInPath_Unmount_Order(t *testing.T) {
 
 	if err != nil {
 		t.Fatalf("expected nil error, got: %v", err)
+	}
+}
+
+type vfsMountCall struct {
+	source, target, fstype string
+	flags                  uintptr
+}
+
+func fakeVirtioFSMounts(t *testing.T) *[]vfsMountCall {
+	t.Helper()
+	var calls []vfsMountCall
+	oldMount, oldMkdir, oldUnmount := unixMount, osMkdirAll, unixUnmount
+	unixMount = func(source, target, fstype string, flags uintptr, _ string) error {
+		calls = append(calls, vfsMountCall{source, target, fstype, flags})
+		return nil
+	}
+	osMkdirAll = func(string, os.FileMode) error { return nil }
+	unixUnmount = func(string, int) error { return nil }
+	virtioFSMounted = map[string]bool{}
+	t.Cleanup(func() { unixMount, osMkdirAll, unixUnmount = oldMount, oldMkdir, oldUnmount })
+	return &calls
+}
+
+func TestMountVirtioFSShareMountsAggregateOnceThenBinds(t *testing.T) {
+	calls := fakeVirtioFSMounts(t)
+	ctx := context.Background()
+	if err := MountVirtioFSShare(ctx, "hcsshim-shares", "0", "/run/mounts/plan9/0", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := MountVirtioFSShare(ctx, "hcsshim-shares", "1", "/run/mounts/plan9/1", true); err != nil {
+		t.Fatal(err)
+	}
+	want := []vfsMountCall{
+		{"hcsshim-shares", "/run/mounts/virtiofs/hcsshim-shares", "virtiofs", 0},
+		{"/run/mounts/virtiofs/hcsshim-shares/0", "/run/mounts/plan9/0", "", unix.MS_BIND},
+		{"/run/mounts/virtiofs/hcsshim-shares/1", "/run/mounts/plan9/1", "", unix.MS_BIND},
+		{"", "/run/mounts/plan9/1", "", unix.MS_BIND | unix.MS_REMOUNT | unix.MS_RDONLY},
+	}
+	if len(*calls) != len(want) {
+		t.Fatalf("calls = %+v", *calls)
+	}
+	for i := range want {
+		if (*calls)[i] != want[i] {
+			t.Fatalf("call %d = %+v, want %+v", i, (*calls)[i], want[i])
+		}
+	}
+}
+
+func TestMountVirtioFSShareRejectsBadShareName(t *testing.T) {
+	calls := fakeVirtioFSMounts(t)
+	for _, name := range []string{"", "..", "a/b", "../x"} {
+		if err := MountVirtioFSShare(context.Background(), "hcsshim-shares", name, "/t", false); err == nil {
+			t.Fatalf("share %q should be rejected", name)
+		}
+	}
+	for _, tag := range []string{"", ".", "..", "a/b", "../../etc", "a\x00b", strings.Repeat("t", 37)} {
+		if err := MountVirtioFSShare(context.Background(), tag, "0", "/t", false); err == nil {
+			t.Fatalf("tag %q should be rejected", tag)
+		}
+	}
+	if len(*calls) != 0 {
+		t.Fatalf("rejected requests mounted: %+v", *calls)
 	}
 }

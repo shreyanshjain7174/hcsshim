@@ -542,6 +542,12 @@ func UnmarshalContainerModifySettings(b []byte) (*containerModifySettings, error
 			return &request, errors.Wrap(err, "failed to unmarshal settings as MappedDirectoryV2")
 		}
 		msr.Settings = md
+	case guestresource.ResourceTypeMappedVirtioFS:
+		mv := &guestresource.LCOWMappedVirtioFS{}
+		if err := commonutils.UnmarshalJSONWithHresult(msrRawSettings, mv); err != nil {
+			return &request, errors.Wrap(err, "failed to unmarshal settings as MappedVirtioFS")
+		}
+		msr.Settings = mv
 	case guestresource.ResourceTypeVPMemDevice:
 		vpd := &guestresource.LCOWMappedVPMemDevice{}
 		if err := commonutils.UnmarshalJSONWithHresult(msrRawSettings, vpd); err != nil {

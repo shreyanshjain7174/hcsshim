@@ -9,7 +9,9 @@ import (
 	gerrors "errors"
 	"fmt"
 	"os"
+	"path"
 	"strings"
+	"sync"
 	"syscall"
 
 	"github.com/Microsoft/hcsshim/internal/ot"
@@ -29,6 +31,7 @@ var (
 	unixUnmount = unix.Unmount
 	unixMount   = unix.Mount
 	osRemoveAll = os.RemoveAll
+	osMkdirAll  = os.MkdirAll
 	listMounts  = listMountPointsUnderPath
 
 	flags = map[string]struct {
@@ -193,4 +196,53 @@ func listMountPointsUnderPath(path string) ([]string, error) {
 	}
 
 	return mountPoints, nil
+}
+
+const virtioFSAggregateRoot = "/run/mounts/virtiofs"
+
+var (
+	virtioFSMu      sync.Mutex
+	virtioFSMounted = map[string]bool{}
+)
+
+// isVirtioFSPathElem reports whether s is a single, non-relative path element.
+func isVirtioFSPathElem(s string) bool {
+	return s != "" && s != "." && s != ".." && !strings.ContainsAny(s, "/\x00")
+}
+
+// MountVirtioFSShare bind-mounts share from the aggregate virtio-fs device tagged tag onto target.
+func MountVirtioFSShare(_ context.Context, tag, share, target string, readonly bool) error {
+	if !isVirtioFSPathElem(tag) || len(tag) > 36 {
+		return fmt.Errorf("invalid virtio-fs tag %q", tag)
+	}
+	if !isVirtioFSPathElem(share) {
+		return fmt.Errorf("invalid virtio-fs share name %q", share)
+	}
+	agg := path.Join(virtioFSAggregateRoot, tag)
+
+	virtioFSMu.Lock()
+	defer virtioFSMu.Unlock()
+	if !virtioFSMounted[tag] {
+		if err := osMkdirAll(agg, 0o700); err != nil {
+			return fmt.Errorf("create %s: %w", agg, err)
+		}
+		if err := unixMount(tag, agg, "virtiofs", 0, ""); err != nil {
+			return fmt.Errorf("mount virtio-fs %s at %s: %w", tag, agg, err)
+		}
+		virtioFSMounted[tag] = true
+	}
+
+	if err := osMkdirAll(target, 0o700); err != nil {
+		return fmt.Errorf("create %s: %w", target, err)
+	}
+	if err := unixMount(path.Join(agg, share), target, "", unix.MS_BIND, ""); err != nil {
+		return fmt.Errorf("bind virtio-fs share %s to %s: %w", share, target, err)
+	}
+	if readonly {
+		if err := unixMount("", target, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
+			_ = unixUnmount(target, 0)
+			return fmt.Errorf("remount %s read-only: %w", target, err)
+		}
+	}
+	return nil
 }

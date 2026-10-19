@@ -22,6 +22,8 @@ const (
 	// ResourceTypeMappedDirectory is the modify resource type for mapped
 	// directories
 	ResourceTypeMappedDirectory guestrequest.ResourceType = "MappedDirectory"
+	// ResourceTypeMappedVirtioFS mounts a child of the aggregate virtio-fs device.
+	ResourceTypeMappedVirtioFS guestrequest.ResourceType = "MappedVirtioFS"
 	// ResourceTypeSCSIDevice is the modify resources type for SCSI devices.
 	// Note this type is not related to mounting a device in the guest, only
 	// for operations on the SCSI device itself.
@@ -144,6 +146,17 @@ type LCOWMappedDirectory struct {
 	MountPath string `json:"MountPath,omitempty"`
 	Port      int32  `json:"Port,omitempty"`
 	ShareName string `json:"ShareName,omitempty"` // If empty not using ANames (not currently supported)
+	ReadOnly  bool   `json:"ReadOnly,omitempty"`
+}
+
+// VirtioFSAggregateTag is the guest tag of the OpenVMM aggregate virtio-fs device.
+const VirtioFSAggregateTag = "hcsshim-shares"
+
+// LCOWMappedVirtioFS is a child of the aggregate virtio-fs device mounted in the guest.
+type LCOWMappedVirtioFS struct {
+	Tag       string `json:"Tag,omitempty"`
+	ShareName string `json:"ShareName,omitempty"`
+	MountPath string `json:"MountPath,omitempty"`
 	ReadOnly  bool   `json:"ReadOnly,omitempty"`
 }
 
