@@ -16,6 +16,7 @@ import (
 	"github.com/Microsoft/hcsshim/internal/hcs/schema1"
 	hcsschema "github.com/Microsoft/hcsshim/internal/hcs/schema2"
 	hcs "github.com/Microsoft/hcsshim/internal/hcs/v2"
+	"github.com/Microsoft/hcsshim/internal/protocol/guestresource"
 	"github.com/Microsoft/hcsshim/internal/vm/guestmanager"
 	"github.com/Microsoft/hcsshim/internal/vm/vmmanager"
 
@@ -294,5 +295,35 @@ func TestWaitReturnsAfterVMExitWhenLogOutputNeverCompletes(t *testing.T) {
 		}
 	case <-time.After(10 * grace):
 		t.Fatal("Wait did not return after the VM exited with the log reader still running")
+	}
+}
+
+type recordingVirtioFSGuest struct {
+	added, removed []guestresource.LCOWMappedVirtioFS
+}
+
+func (r *recordingVirtioFSGuest) AddMappedVirtioFS(_ context.Context, s guestresource.LCOWMappedVirtioFS) error {
+	r.added = append(r.added, s)
+	return nil
+}
+
+func (r *recordingVirtioFSGuest) RemoveMappedVirtioFS(_ context.Context, s guestresource.LCOWMappedVirtioFS) error {
+	r.removed = append(r.removed, s)
+	return nil
+}
+
+func TestVirtioFSGuestTranslatesMappedDirectory(t *testing.T) {
+	rec := &recordingVirtioFSGuest{}
+	g := virtioFSGuest{guest: rec}
+	md := guestresource.LCOWMappedDirectory{MountPath: "/run/mounts/plan9/3", ShareName: "3", Port: 564, ReadOnly: true}
+	if err := g.AddMappedDirectory(context.Background(), md); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.RemoveMappedDirectory(context.Background(), md); err != nil {
+		t.Fatal(err)
+	}
+	want := guestresource.LCOWMappedVirtioFS{Tag: guestresource.VirtioFSAggregateTag, ShareName: "3", MountPath: "/run/mounts/plan9/3", ReadOnly: true}
+	if len(rec.added) != 1 || rec.added[0] != want || len(rec.removed) != 1 || rec.removed[0] != want {
+		t.Fatalf("added=%+v removed=%+v", rec.added, rec.removed)
 	}
 }

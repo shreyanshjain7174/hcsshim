@@ -142,10 +142,41 @@ func (c *Controller) Plan9Controller() *plan9.Controller {
 			noWritableShares = c.sandboxOptions.NoWritableFileShares
 		}
 
-		c.plan9Controller = plan9.New(c.uvm, c.guest, noWritableShares)
+		if c.directCreate != nil {
+			c.plan9Controller = plan9.New(c.uvm, virtioFSGuest{guest: c.guest}, noWritableShares)
+		} else {
+			c.plan9Controller = plan9.New(c.uvm, c.guest, noWritableShares)
+		}
 	}
 
 	return c.plan9Controller
+}
+
+type virtioFSMounter interface {
+	AddMappedVirtioFS(ctx context.Context, settings guestresource.LCOWMappedVirtioFS) error
+	RemoveMappedVirtioFS(ctx context.Context, settings guestresource.LCOWMappedVirtioFS) error
+}
+
+// virtioFSGuest serves Plan9-shaped guest mount requests from the aggregate virtio-fs device.
+type virtioFSGuest struct {
+	guest virtioFSMounter
+}
+
+func (g virtioFSGuest) AddMappedDirectory(ctx context.Context, md guestresource.LCOWMappedDirectory) error {
+	return g.guest.AddMappedVirtioFS(ctx, toVirtioFS(md))
+}
+
+func (g virtioFSGuest) RemoveMappedDirectory(ctx context.Context, md guestresource.LCOWMappedDirectory) error {
+	return g.guest.RemoveMappedVirtioFS(ctx, toVirtioFS(md))
+}
+
+func toVirtioFS(md guestresource.LCOWMappedDirectory) guestresource.LCOWMappedVirtioFS {
+	return guestresource.LCOWMappedVirtioFS{
+		Tag:       guestresource.VirtioFSAggregateTag,
+		ShareName: md.ShareName,
+		MountPath: md.MountPath,
+		ReadOnly:  md.ReadOnly,
+	}
 }
 
 // setupEntropyListener sets up entropy for LCOW UVMs.
