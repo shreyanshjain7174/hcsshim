@@ -1,7 +1,7 @@
 // Package vmservice is the generated gRPC client for the OpenVMM vmservice API.
 //
 // Source: openvmm/openvmm_ttrpc_vmservice/src/vmservice.proto at OpenVMM revision
-// 2a0db026c788fdcde91a40cbb7a04d1f852fb1fa on branch user/shsancheti/openvmm-lcow-mvp
+// 1f28f042175ee98fe2781253602062d445f0870f on branch user/shsancheti/openvmm-virtiofs-shares
 // of github.com/shreyanshjain7174/openvmm. Re-pin to an upstream OpenVMM commit before merge.
 //
 // Toolchain: protoc libprotoc 34.1, protoc-gen-go v1.36.12 and protoc-gen-go-grpc 1.6.2

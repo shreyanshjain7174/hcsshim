@@ -787,8 +787,10 @@ type DevicesConfig struct {
 	WindowsDevice  []*WindowsPCIDevice  `protobuf:"bytes,4,rep,name=windows_device,json=windowsDevice,proto3" json:"windows_device,omitempty"`
 	VirtiofsConfig []*VirtioFSConfig    `protobuf:"bytes,5,rep,name=virtiofs_config,json=virtiofsConfig,proto3" json:"virtiofs_config,omitempty"`
 	VirtioConsole  *VirtioConsoleConfig `protobuf:"bytes,6,opt,name=virtio_console,json=virtioConsole,proto3" json:"virtio_console,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// One aggregate virtio-fs device whose children are added with ModifyResource.
+	VirtiofsAggregate *VirtioFSAggregateConfig `protobuf:"bytes,7,opt,name=virtiofs_aggregate,json=virtiofsAggregate,proto3" json:"virtiofs_aggregate,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DevicesConfig) Reset() {
@@ -859,6 +861,13 @@ func (x *DevicesConfig) GetVirtiofsConfig() []*VirtioFSConfig {
 func (x *DevicesConfig) GetVirtioConsole() *VirtioConsoleConfig {
 	if x != nil {
 		return x.VirtioConsole
+	}
+	return nil
+}
+
+func (x *DevicesConfig) GetVirtiofsAggregate() *VirtioFSAggregateConfig {
+	if x != nil {
+		return x.VirtiofsAggregate
 	}
 	return nil
 }
@@ -4408,6 +4417,122 @@ func (x *VirtioFSConfig) GetReadOnly() bool {
 	return false
 }
 
+type VirtioFSAggregateConfig struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Guest-visible tag. Must be 36 bytes or fewer.
+	Tag           string `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VirtioFSAggregateConfig) Reset() {
+	*x = VirtioFSAggregateConfig{}
+	mi := &file_vmservice_proto_msgTypes[56]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VirtioFSAggregateConfig) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VirtioFSAggregateConfig) ProtoMessage() {}
+
+func (x *VirtioFSAggregateConfig) ProtoReflect() protoreflect.Message {
+	mi := &file_vmservice_proto_msgTypes[56]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VirtioFSAggregateConfig.ProtoReflect.Descriptor instead.
+func (*VirtioFSAggregateConfig) Descriptor() ([]byte, []int) {
+	return file_vmservice_proto_rawDescGZIP(), []int{56}
+}
+
+func (x *VirtioFSAggregateConfig) GetTag() string {
+	if x != nil {
+		return x.Tag
+	}
+	return ""
+}
+
+// A child share of the aggregate virtio-fs device.
+type VirtioFSShare struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	// Required for ADD, ignored for REMOVE.
+	RootPath string `protobuf:"bytes,2,opt,name=root_path,json=rootPath,proto3" json:"root_path,omitempty"`
+	ReadOnly bool   `protobuf:"varint,3,opt,name=read_only,json=readOnly,proto3" json:"read_only,omitempty"`
+	// When set, only these names are visible at the share root.
+	AllowedNames  []string `protobuf:"bytes,4,rep,name=allowed_names,json=allowedNames,proto3" json:"allowed_names,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *VirtioFSShare) Reset() {
+	*x = VirtioFSShare{}
+	mi := &file_vmservice_proto_msgTypes[57]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *VirtioFSShare) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*VirtioFSShare) ProtoMessage() {}
+
+func (x *VirtioFSShare) ProtoReflect() protoreflect.Message {
+	mi := &file_vmservice_proto_msgTypes[57]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use VirtioFSShare.ProtoReflect.Descriptor instead.
+func (*VirtioFSShare) Descriptor() ([]byte, []int) {
+	return file_vmservice_proto_rawDescGZIP(), []int{57}
+}
+
+func (x *VirtioFSShare) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *VirtioFSShare) GetRootPath() string {
+	if x != nil {
+		return x.RootPath
+	}
+	return ""
+}
+
+func (x *VirtioFSShare) GetReadOnly() bool {
+	if x != nil {
+		return x.ReadOnly
+	}
+	return false
+}
+
+func (x *VirtioFSShare) GetAllowedNames() []string {
+	if x != nil {
+		return x.AllowedNames
+	}
+	return nil
+}
+
 type VirtioConsoleConfig struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Path to a named pipe or Unix domain socket for the console backend.
@@ -4422,7 +4547,7 @@ type VirtioConsoleConfig struct {
 
 func (x *VirtioConsoleConfig) Reset() {
 	*x = VirtioConsoleConfig{}
-	mi := &file_vmservice_proto_msgTypes[56]
+	mi := &file_vmservice_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4434,7 +4559,7 @@ func (x *VirtioConsoleConfig) String() string {
 func (*VirtioConsoleConfig) ProtoMessage() {}
 
 func (x *VirtioConsoleConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_vmservice_proto_msgTypes[56]
+	mi := &file_vmservice_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4447,7 +4572,7 @@ func (x *VirtioConsoleConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VirtioConsoleConfig.ProtoReflect.Descriptor instead.
 func (*VirtioConsoleConfig) Descriptor() ([]byte, []int) {
-	return file_vmservice_proto_rawDescGZIP(), []int{56}
+	return file_vmservice_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *VirtioConsoleConfig) GetSocketPath() string {
@@ -4473,7 +4598,7 @@ type ModifyMemoryRequest struct {
 
 func (x *ModifyMemoryRequest) Reset() {
 	*x = ModifyMemoryRequest{}
-	mi := &file_vmservice_proto_msgTypes[57]
+	mi := &file_vmservice_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4485,7 +4610,7 @@ func (x *ModifyMemoryRequest) String() string {
 func (*ModifyMemoryRequest) ProtoMessage() {}
 
 func (x *ModifyMemoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vmservice_proto_msgTypes[57]
+	mi := &file_vmservice_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4498,7 +4623,7 @@ func (x *ModifyMemoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModifyMemoryRequest.ProtoReflect.Descriptor instead.
 func (*ModifyMemoryRequest) Descriptor() ([]byte, []int) {
-	return file_vmservice_proto_rawDescGZIP(), []int{57}
+	return file_vmservice_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *ModifyMemoryRequest) GetMemoryMb() uint64 {
@@ -4518,7 +4643,7 @@ type ModifyProcessorRequest struct {
 
 func (x *ModifyProcessorRequest) Reset() {
 	*x = ModifyProcessorRequest{}
-	mi := &file_vmservice_proto_msgTypes[58]
+	mi := &file_vmservice_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4530,7 +4655,7 @@ func (x *ModifyProcessorRequest) String() string {
 func (*ModifyProcessorRequest) ProtoMessage() {}
 
 func (x *ModifyProcessorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vmservice_proto_msgTypes[58]
+	mi := &file_vmservice_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4543,7 +4668,7 @@ func (x *ModifyProcessorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModifyProcessorRequest.ProtoReflect.Descriptor instead.
 func (*ModifyProcessorRequest) Descriptor() ([]byte, []int) {
-	return file_vmservice_proto_rawDescGZIP(), []int{58}
+	return file_vmservice_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ModifyProcessorRequest) GetProcessorIndex() uint32 {
@@ -4563,7 +4688,7 @@ type ModifyProcessorConfigRequest struct {
 
 func (x *ModifyProcessorConfigRequest) Reset() {
 	*x = ModifyProcessorConfigRequest{}
-	mi := &file_vmservice_proto_msgTypes[59]
+	mi := &file_vmservice_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4575,7 +4700,7 @@ func (x *ModifyProcessorConfigRequest) String() string {
 func (*ModifyProcessorConfigRequest) ProtoMessage() {}
 
 func (x *ModifyProcessorConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vmservice_proto_msgTypes[59]
+	mi := &file_vmservice_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4588,7 +4713,7 @@ func (x *ModifyProcessorConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModifyProcessorConfigRequest.ProtoReflect.Descriptor instead.
 func (*ModifyProcessorConfigRequest) Descriptor() ([]byte, []int) {
-	return file_vmservice_proto_rawDescGZIP(), []int{59}
+	return file_vmservice_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *ModifyProcessorConfigRequest) GetProcessorWeight() uint32 {
@@ -4617,6 +4742,7 @@ type ModifyResourceRequest struct {
 	//	*ModifyResourceRequest_VpmemDisk
 	//	*ModifyResourceRequest_NicConfig
 	//	*ModifyResourceRequest_WindowsDevice
+	//	*ModifyResourceRequest_VirtiofsShare
 	Resource      isModifyResourceRequest_Resource `protobuf_oneof:"resource"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4624,7 +4750,7 @@ type ModifyResourceRequest struct {
 
 func (x *ModifyResourceRequest) Reset() {
 	*x = ModifyResourceRequest{}
-	mi := &file_vmservice_proto_msgTypes[60]
+	mi := &file_vmservice_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4636,7 +4762,7 @@ func (x *ModifyResourceRequest) String() string {
 func (*ModifyResourceRequest) ProtoMessage() {}
 
 func (x *ModifyResourceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vmservice_proto_msgTypes[60]
+	mi := &file_vmservice_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4649,7 +4775,7 @@ func (x *ModifyResourceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModifyResourceRequest.ProtoReflect.Descriptor instead.
 func (*ModifyResourceRequest) Descriptor() ([]byte, []int) {
-	return file_vmservice_proto_rawDescGZIP(), []int{60}
+	return file_vmservice_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *ModifyResourceRequest) GetType() ModifyType {
@@ -4729,6 +4855,15 @@ func (x *ModifyResourceRequest) GetWindowsDevice() *WindowsPCIDevice {
 	return nil
 }
 
+func (x *ModifyResourceRequest) GetVirtiofsShare() *VirtioFSShare {
+	if x != nil {
+		if x, ok := x.Resource.(*ModifyResourceRequest_VirtiofsShare); ok {
+			return x.VirtiofsShare
+		}
+	}
+	return nil
+}
+
 type isModifyResourceRequest_Resource interface {
 	isModifyResourceRequest_Resource()
 }
@@ -4761,6 +4896,10 @@ type ModifyResourceRequest_WindowsDevice struct {
 	WindowsDevice *WindowsPCIDevice `protobuf:"bytes,8,opt,name=windows_device,json=windowsDevice,proto3,oneof"`
 }
 
+type ModifyResourceRequest_VirtiofsShare struct {
+	VirtiofsShare *VirtioFSShare `protobuf:"bytes,9,opt,name=virtiofs_share,json=virtiofsShare,proto3,oneof"`
+}
+
 func (*ModifyResourceRequest_Processor) isModifyResourceRequest_Resource() {}
 
 func (*ModifyResourceRequest_ProcessorConfig) isModifyResourceRequest_Resource() {}
@@ -4774,6 +4913,8 @@ func (*ModifyResourceRequest_VpmemDisk) isModifyResourceRequest_Resource() {}
 func (*ModifyResourceRequest_NicConfig) isModifyResourceRequest_Resource() {}
 
 func (*ModifyResourceRequest_WindowsDevice) isModifyResourceRequest_Resource() {}
+
+func (*ModifyResourceRequest_VirtiofsShare) isModifyResourceRequest_Resource() {}
 
 // PCIe device hot add/remove request/response
 //
@@ -4791,7 +4932,7 @@ type AddPcieDeviceRequest struct {
 
 func (x *AddPcieDeviceRequest) Reset() {
 	*x = AddPcieDeviceRequest{}
-	mi := &file_vmservice_proto_msgTypes[61]
+	mi := &file_vmservice_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4803,7 +4944,7 @@ func (x *AddPcieDeviceRequest) String() string {
 func (*AddPcieDeviceRequest) ProtoMessage() {}
 
 func (x *AddPcieDeviceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vmservice_proto_msgTypes[61]
+	mi := &file_vmservice_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4816,7 +4957,7 @@ func (x *AddPcieDeviceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddPcieDeviceRequest.ProtoReflect.Descriptor instead.
 func (*AddPcieDeviceRequest) Descriptor() ([]byte, []int) {
-	return file_vmservice_proto_rawDescGZIP(), []int{61}
+	return file_vmservice_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *AddPcieDeviceRequest) GetPortName() string {
@@ -4844,7 +4985,7 @@ type RemovePcieDeviceRequest struct {
 
 func (x *RemovePcieDeviceRequest) Reset() {
 	*x = RemovePcieDeviceRequest{}
-	mi := &file_vmservice_proto_msgTypes[62]
+	mi := &file_vmservice_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4856,7 +4997,7 @@ func (x *RemovePcieDeviceRequest) String() string {
 func (*RemovePcieDeviceRequest) ProtoMessage() {}
 
 func (x *RemovePcieDeviceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_vmservice_proto_msgTypes[62]
+	mi := &file_vmservice_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4869,7 +5010,7 @@ func (x *RemovePcieDeviceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemovePcieDeviceRequest.ProtoReflect.Descriptor instead.
 func (*RemovePcieDeviceRequest) Descriptor() ([]byte, []int) {
-	return file_vmservice_proto_rawDescGZIP(), []int{62}
+	return file_vmservice_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *RemovePcieDeviceRequest) GetPortName() string {
@@ -4891,7 +5032,7 @@ type UEFI_InitialVariables struct {
 
 func (x *UEFI_InitialVariables) Reset() {
 	*x = UEFI_InitialVariables{}
-	mi := &file_vmservice_proto_msgTypes[63]
+	mi := &file_vmservice_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4903,7 +5044,7 @@ func (x *UEFI_InitialVariables) String() string {
 func (*UEFI_InitialVariables) ProtoMessage() {}
 
 func (x *UEFI_InitialVariables) ProtoReflect() protoreflect.Message {
-	mi := &file_vmservice_proto_msgTypes[63]
+	mi := &file_vmservice_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4943,7 +5084,7 @@ type VMConfig_GuestPowerActions struct {
 
 func (x *VMConfig_GuestPowerActions) Reset() {
 	*x = VMConfig_GuestPowerActions{}
-	mi := &file_vmservice_proto_msgTypes[64]
+	mi := &file_vmservice_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4955,7 +5096,7 @@ func (x *VMConfig_GuestPowerActions) String() string {
 func (*VMConfig_GuestPowerActions) ProtoMessage() {}
 
 func (x *VMConfig_GuestPowerActions) ProtoReflect() protoreflect.Message {
-	mi := &file_vmservice_proto_msgTypes[64]
+	mi := &file_vmservice_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5013,7 +5154,7 @@ type SerialConfig_Config struct {
 
 func (x *SerialConfig_Config) Reset() {
 	*x = SerialConfig_Config{}
-	mi := &file_vmservice_proto_msgTypes[65]
+	mi := &file_vmservice_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5025,7 +5166,7 @@ func (x *SerialConfig_Config) String() string {
 func (*SerialConfig_Config) ProtoMessage() {}
 
 func (x *SerialConfig_Config) ProtoReflect() protoreflect.Message {
-	mi := &file_vmservice_proto_msgTypes[65]
+	mi := &file_vmservice_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5074,7 +5215,7 @@ type CapabilitiesVMResponse_SupportedResource struct {
 
 func (x *CapabilitiesVMResponse_SupportedResource) Reset() {
 	*x = CapabilitiesVMResponse_SupportedResource{}
-	mi := &file_vmservice_proto_msgTypes[66]
+	mi := &file_vmservice_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5086,7 +5227,7 @@ func (x *CapabilitiesVMResponse_SupportedResource) String() string {
 func (*CapabilitiesVMResponse_SupportedResource) ProtoMessage() {}
 
 func (x *CapabilitiesVMResponse_SupportedResource) ProtoReflect() protoreflect.Message {
-	mi := &file_vmservice_proto_msgTypes[66]
+	mi := &file_vmservice_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5165,7 +5306,7 @@ const file_vmservice_proto_rawDesc = "" +
 	"\x0fProcessorConfig\x12'\n" +
 	"\x0fprocessor_count\x18\x01 \x01(\rR\x0eprocessorCount\x12)\n" +
 	"\x10processor_weight\x18\x02 \x01(\rR\x0fprocessorWeight\x12'\n" +
-	"\x0fprocessor_limit\x18\x03 \x01(\rR\x0eprocessorLimit\"\xfe\x02\n" +
+	"\x0fprocessor_limit\x18\x03 \x01(\rR\x0eprocessorLimit\"\xd1\x03\n" +
 	"\rDevicesConfig\x122\n" +
 	"\n" +
 	"scsi_disks\x18\x01 \x03(\v2\x13.vmservice.SCSIDiskR\tscsiDisks\x125\n" +
@@ -5175,7 +5316,8 @@ const file_vmservice_proto_rawDesc = "" +
 	"nic_config\x18\x03 \x03(\v2\x14.vmservice.NICConfigR\tnicConfig\x12B\n" +
 	"\x0ewindows_device\x18\x04 \x03(\v2\x1b.vmservice.WindowsPCIDeviceR\rwindowsDevice\x12B\n" +
 	"\x0fvirtiofs_config\x18\x05 \x03(\v2\x19.vmservice.VirtioFSConfigR\x0evirtiofsConfig\x12E\n" +
-	"\x0evirtio_console\x18\x06 \x01(\v2\x1e.vmservice.VirtioConsoleConfigR\rvirtioConsole\"\xa5\x01\n" +
+	"\x0evirtio_console\x18\x06 \x01(\v2\x1e.vmservice.VirtioConsoleConfigR\rvirtioConsole\x12Q\n" +
+	"\x12virtiofs_aggregate\x18\a \x01(\v2\".vmservice.VirtioFSAggregateConfigR\x11virtiofsAggregate\"\xa5\x01\n" +
 	"\x0ePcieDeviceKind\x121\n" +
 	"\x06virtio\x18\x01 \x01(\v2\x17.vmservice.VirtioDeviceH\x00R\x06virtio\x12+\n" +
 	"\x04nvme\x18\x02 \x01(\v2\x15.vmservice.NvmeConfigH\x00R\x04nvme\x12+\n" +
@@ -5466,7 +5608,14 @@ const file_vmservice_proto_rawDesc = "" +
 	"\x0eVirtioFSConfig\x12\x10\n" +
 	"\x03tag\x18\x01 \x01(\tR\x03tag\x12\x1b\n" +
 	"\troot_path\x18\x02 \x01(\tR\brootPath\x12\x1b\n" +
-	"\tread_only\x18\x03 \x01(\bR\breadOnly\"P\n" +
+	"\tread_only\x18\x03 \x01(\bR\breadOnly\"+\n" +
+	"\x17VirtioFSAggregateConfig\x12\x10\n" +
+	"\x03tag\x18\x01 \x01(\tR\x03tag\"\x82\x01\n" +
+	"\rVirtioFSShare\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1b\n" +
+	"\troot_path\x18\x02 \x01(\tR\brootPath\x12\x1b\n" +
+	"\tread_only\x18\x03 \x01(\bR\breadOnly\x12#\n" +
+	"\rallowed_names\x18\x04 \x03(\tR\fallowedNames\"P\n" +
 	"\x13VirtioConsoleConfig\x12\x1f\n" +
 	"\vsocket_path\x18\x01 \x01(\tR\n" +
 	"socketPath\x12\x18\n" +
@@ -5477,7 +5626,7 @@ const file_vmservice_proto_rawDesc = "" +
 	"\x0fprocessor_index\x18\x01 \x01(\rR\x0eprocessorIndex\"r\n" +
 	"\x1cModifyProcessorConfigRequest\x12)\n" +
 	"\x10processor_weight\x18\x01 \x01(\rR\x0fprocessorWeight\x12'\n" +
-	"\x0fprocessor_limit\x18\x02 \x01(\rR\x0eprocessorLimit\"\x89\x04\n" +
+	"\x0fprocessor_limit\x18\x02 \x01(\rR\x0eprocessorLimit\"\xcc\x04\n" +
 	"\x15ModifyResourceRequest\x12)\n" +
 	"\x04type\x18\x01 \x01(\x0e2\x15.vmservice.ModifyTypeR\x04type\x12A\n" +
 	"\tprocessor\x18\x02 \x01(\v2!.vmservice.ModifyProcessorRequestH\x00R\tprocessor\x12T\n" +
@@ -5488,7 +5637,8 @@ const file_vmservice_proto_rawDesc = "" +
 	"vpmem_disk\x18\x06 \x01(\v2\x14.vmservice.VPMEMDiskH\x00R\tvpmemDisk\x125\n" +
 	"\n" +
 	"nic_config\x18\a \x01(\v2\x14.vmservice.NICConfigH\x00R\tnicConfig\x12D\n" +
-	"\x0ewindows_device\x18\b \x01(\v2\x1b.vmservice.WindowsPCIDeviceH\x00R\rwindowsDeviceB\n" +
+	"\x0ewindows_device\x18\b \x01(\v2\x1b.vmservice.WindowsPCIDeviceH\x00R\rwindowsDevice\x12A\n" +
+	"\x0evirtiofs_share\x18\t \x01(\v2\x18.vmservice.VirtioFSShareH\x00R\rvirtiofsShareB\n" +
 	"\n" +
 	"\bresource\"f\n" +
 	"\x14AddPcieDeviceRequest\x12\x1b\n" +
@@ -5545,7 +5695,7 @@ func file_vmservice_proto_rawDescGZIP() []byte {
 }
 
 var file_vmservice_proto_enumTypes = make([]protoimpl.EnumInfo, 9)
-var file_vmservice_proto_msgTypes = make([]protoimpl.MessageInfo, 67)
+var file_vmservice_proto_msgTypes = make([]protoimpl.MessageInfo, 69)
 var file_vmservice_proto_goTypes = []any{
 	(VmState)(0),    // 0: vmservice.VmState
 	(ModifyType)(0), // 1: vmservice.ModifyType
@@ -5612,131 +5762,135 @@ var file_vmservice_proto_goTypes = []any{
 	(*ConsommeBackend)(nil),                          // 62: vmservice.ConsommeBackend
 	(*WindowsPCIDevice)(nil),                         // 63: vmservice.WindowsPCIDevice
 	(*VirtioFSConfig)(nil),                           // 64: vmservice.VirtioFSConfig
-	(*VirtioConsoleConfig)(nil),                      // 65: vmservice.VirtioConsoleConfig
-	(*ModifyMemoryRequest)(nil),                      // 66: vmservice.ModifyMemoryRequest
-	(*ModifyProcessorRequest)(nil),                   // 67: vmservice.ModifyProcessorRequest
-	(*ModifyProcessorConfigRequest)(nil),             // 68: vmservice.ModifyProcessorConfigRequest
-	(*ModifyResourceRequest)(nil),                    // 69: vmservice.ModifyResourceRequest
-	(*AddPcieDeviceRequest)(nil),                     // 70: vmservice.AddPcieDeviceRequest
-	(*RemovePcieDeviceRequest)(nil),                  // 71: vmservice.RemovePcieDeviceRequest
-	(*UEFI_InitialVariables)(nil),                    // 72: vmservice.UEFI.InitialVariables
-	(*VMConfig_GuestPowerActions)(nil),               // 73: vmservice.VMConfig.GuestPowerActions
-	(*SerialConfig_Config)(nil),                      // 74: vmservice.SerialConfig.Config
-	(*CapabilitiesVMResponse_SupportedResource)(nil), // 75: vmservice.CapabilitiesVMResponse.SupportedResource
-	(*emptypb.Empty)(nil),                            // 76: google.protobuf.Empty
+	(*VirtioFSAggregateConfig)(nil),                  // 65: vmservice.VirtioFSAggregateConfig
+	(*VirtioFSShare)(nil),                            // 66: vmservice.VirtioFSShare
+	(*VirtioConsoleConfig)(nil),                      // 67: vmservice.VirtioConsoleConfig
+	(*ModifyMemoryRequest)(nil),                      // 68: vmservice.ModifyMemoryRequest
+	(*ModifyProcessorRequest)(nil),                   // 69: vmservice.ModifyProcessorRequest
+	(*ModifyProcessorConfigRequest)(nil),             // 70: vmservice.ModifyProcessorConfigRequest
+	(*ModifyResourceRequest)(nil),                    // 71: vmservice.ModifyResourceRequest
+	(*AddPcieDeviceRequest)(nil),                     // 72: vmservice.AddPcieDeviceRequest
+	(*RemovePcieDeviceRequest)(nil),                  // 73: vmservice.RemovePcieDeviceRequest
+	(*UEFI_InitialVariables)(nil),                    // 74: vmservice.UEFI.InitialVariables
+	(*VMConfig_GuestPowerActions)(nil),               // 75: vmservice.VMConfig.GuestPowerActions
+	(*SerialConfig_Config)(nil),                      // 76: vmservice.SerialConfig.Config
+	(*CapabilitiesVMResponse_SupportedResource)(nil), // 77: vmservice.CapabilitiesVMResponse.SupportedResource
+	(*emptypb.Empty)(nil),                            // 78: google.protobuf.Empty
 }
 var file_vmservice_proto_depIdxs = []int32{
-	72, // 0: vmservice.UEFI.initial_variables:type_name -> vmservice.UEFI.InitialVariables
+	74, // 0: vmservice.UEFI.initial_variables:type_name -> vmservice.UEFI.InitialVariables
 	56, // 1: vmservice.DevicesConfig.scsi_disks:type_name -> vmservice.SCSIDisk
 	57, // 2: vmservice.DevicesConfig.vpmem_disks:type_name -> vmservice.VPMEMDisk
 	58, // 3: vmservice.DevicesConfig.nic_config:type_name -> vmservice.NICConfig
 	63, // 4: vmservice.DevicesConfig.windows_device:type_name -> vmservice.WindowsPCIDevice
 	64, // 5: vmservice.DevicesConfig.virtiofs_config:type_name -> vmservice.VirtioFSConfig
-	65, // 6: vmservice.DevicesConfig.virtio_console:type_name -> vmservice.VirtioConsoleConfig
-	15, // 7: vmservice.PcieDeviceKind.virtio:type_name -> vmservice.VirtioDevice
-	31, // 8: vmservice.PcieDeviceKind.nvme:type_name -> vmservice.NvmeConfig
-	33, // 9: vmservice.PcieDeviceKind.vfio:type_name -> vmservice.VfioDevice
-	21, // 10: vmservice.VirtioDevice.blk:type_name -> vmservice.VirtioBlk
-	22, // 11: vmservice.VirtioDevice.net:type_name -> vmservice.VirtioNet
-	29, // 12: vmservice.VirtioDevice.rng:type_name -> vmservice.VirtioRng
-	30, // 13: vmservice.VirtioDevice.vsock:type_name -> vmservice.VirtioVsock
-	16, // 14: vmservice.VirtioDevice.console:type_name -> vmservice.VirtioConsole
-	24, // 15: vmservice.VirtioDevice.vhost_user:type_name -> vmservice.VhostUser
-	17, // 16: vmservice.VirtioConsole.backend:type_name -> vmservice.SerialBackend
-	18, // 17: vmservice.SerialBackend.relay:type_name -> vmservice.SerialRelay
-	20, // 18: vmservice.DiskBackend.file:type_name -> vmservice.FileDisk
-	19, // 19: vmservice.VirtioBlk.backend:type_name -> vmservice.DiskBackend
-	23, // 20: vmservice.VirtioNet.backend:type_name -> vmservice.NicBackend
-	59, // 21: vmservice.NicBackend.dio:type_name -> vmservice.DioBackend
-	60, // 22: vmservice.NicBackend.tap:type_name -> vmservice.TapBackend
-	62, // 23: vmservice.NicBackend.consomme:type_name -> vmservice.ConsommeBackend
-	25, // 24: vmservice.VhostUser.device:type_name -> vmservice.VhostUserDevice
-	26, // 25: vmservice.VhostUserDevice.blk:type_name -> vmservice.VhostUserBlk
-	27, // 26: vmservice.VhostUserDevice.fs:type_name -> vmservice.VhostUserFs
-	28, // 27: vmservice.VhostUserDevice.other:type_name -> vmservice.VhostUserGeneric
-	32, // 28: vmservice.NvmeConfig.namespaces:type_name -> vmservice.NvmeNamespace
-	19, // 29: vmservice.NvmeNamespace.backend:type_name -> vmservice.DiskBackend
-	34, // 30: vmservice.VfioDevice.bar_addresses:type_name -> vmservice.VfioBarAddress
-	76, // 31: vmservice.VfioBarAddress.host:type_name -> google.protobuf.Empty
-	36, // 32: vmservice.NumaConfig.nodes:type_name -> vmservice.NumaNode
-	39, // 33: vmservice.NumaConfig.distances:type_name -> vmservice.NumaDistance
-	38, // 34: vmservice.NumaNode.memory:type_name -> vmservice.NodeMemoryConfig
-	37, // 35: vmservice.NumaNode.vps:type_name -> vmservice.VpAssignment
-	42, // 36: vmservice.PcieTopologyConfig.root_complexes:type_name -> vmservice.PcieRootComplex
-	41, // 37: vmservice.PcieTopologyConfig.generic_initiators:type_name -> vmservice.PcieGenericInitiator
-	43, // 38: vmservice.PcieRootComplex.root_ports:type_name -> vmservice.PciePort
-	45, // 39: vmservice.PciePort.attached:type_name -> vmservice.PcieAttachment
-	43, // 40: vmservice.PcieSwitch.downstream_ports:type_name -> vmservice.PciePort
-	14, // 41: vmservice.PcieAttachment.device:type_name -> vmservice.PcieDeviceKind
-	44, // 42: vmservice.PcieAttachment.switch:type_name -> vmservice.PcieSwitch
-	11, // 43: vmservice.VMConfig.memory_config:type_name -> vmservice.MemoryConfig
-	12, // 44: vmservice.VMConfig.processor_config:type_name -> vmservice.ProcessorConfig
-	13, // 45: vmservice.VMConfig.devices_config:type_name -> vmservice.DevicesConfig
-	48, // 46: vmservice.VMConfig.serial_config:type_name -> vmservice.SerialConfig
-	9,  // 47: vmservice.VMConfig.direct_boot:type_name -> vmservice.DirectBoot
-	10, // 48: vmservice.VMConfig.uefi:type_name -> vmservice.UEFI
-	47, // 49: vmservice.VMConfig.windows_options:type_name -> vmservice.WindowsOptions
-	49, // 50: vmservice.VMConfig.hvsocket_config:type_name -> vmservice.HVSocketConfig
-	35, // 51: vmservice.VMConfig.numa_config:type_name -> vmservice.NumaConfig
-	40, // 52: vmservice.VMConfig.pcie:type_name -> vmservice.PcieTopologyConfig
-	73, // 53: vmservice.VMConfig.guest_power_actions:type_name -> vmservice.VMConfig.GuestPowerActions
-	74, // 54: vmservice.SerialConfig.ports:type_name -> vmservice.SerialConfig.Config
-	46, // 55: vmservice.CreateVMRequest.config:type_name -> vmservice.VMConfig
-	6,  // 56: vmservice.PropertiesVMRequest.types:type_name -> vmservice.PropertiesVMRequest.PropertiesType
-	51, // 57: vmservice.PropertiesVMResponse.memory_stats:type_name -> vmservice.MemoryStats
-	52, // 58: vmservice.PropertiesVMResponse.processor_stats:type_name -> vmservice.ProcessorStats
-	0,  // 59: vmservice.PropertiesVMResponse.state:type_name -> vmservice.VmState
-	75, // 60: vmservice.CapabilitiesVMResponse.supported_resources:type_name -> vmservice.CapabilitiesVMResponse.SupportedResource
-	8,  // 61: vmservice.CapabilitiesVMResponse.supported_guest_os:type_name -> vmservice.CapabilitiesVMResponse.SupportedGuestOS
-	2,  // 62: vmservice.SCSIDisk.type:type_name -> vmservice.DiskType
-	2,  // 63: vmservice.VPMEMDisk.type:type_name -> vmservice.DiskType
-	59, // 64: vmservice.NICConfig.dio:type_name -> vmservice.DioBackend
-	60, // 65: vmservice.NICConfig.tap:type_name -> vmservice.TapBackend
-	62, // 66: vmservice.NICConfig.consomme:type_name -> vmservice.ConsommeBackend
-	3,  // 67: vmservice.PortConfig.protocol:type_name -> vmservice.IpProtocol
-	61, // 68: vmservice.ConsommeBackend.ports:type_name -> vmservice.PortConfig
-	1,  // 69: vmservice.ModifyResourceRequest.type:type_name -> vmservice.ModifyType
-	67, // 70: vmservice.ModifyResourceRequest.processor:type_name -> vmservice.ModifyProcessorRequest
-	68, // 71: vmservice.ModifyResourceRequest.processor_config:type_name -> vmservice.ModifyProcessorConfigRequest
-	66, // 72: vmservice.ModifyResourceRequest.memory:type_name -> vmservice.ModifyMemoryRequest
-	56, // 73: vmservice.ModifyResourceRequest.scsi_disk:type_name -> vmservice.SCSIDisk
-	57, // 74: vmservice.ModifyResourceRequest.vpmem_disk:type_name -> vmservice.VPMEMDisk
-	58, // 75: vmservice.ModifyResourceRequest.nic_config:type_name -> vmservice.NICConfig
-	63, // 76: vmservice.ModifyResourceRequest.windows_device:type_name -> vmservice.WindowsPCIDevice
-	14, // 77: vmservice.AddPcieDeviceRequest.device:type_name -> vmservice.PcieDeviceKind
-	4,  // 78: vmservice.UEFI.InitialVariables.secure_boot_template:type_name -> vmservice.UEFI.InitialVariables.SecureBootTemplate
-	5,  // 79: vmservice.VMConfig.GuestPowerActions.shutdown:type_name -> vmservice.VMConfig.GuestPowerAction
-	5,  // 80: vmservice.VMConfig.GuestPowerActions.reset:type_name -> vmservice.VMConfig.GuestPowerAction
-	5,  // 81: vmservice.VMConfig.GuestPowerActions.crash:type_name -> vmservice.VMConfig.GuestPowerAction
-	5,  // 82: vmservice.VMConfig.GuestPowerActions.watchdog:type_name -> vmservice.VMConfig.GuestPowerAction
-	7,  // 83: vmservice.CapabilitiesVMResponse.SupportedResource.resource:type_name -> vmservice.CapabilitiesVMResponse.Resource
-	50, // 84: vmservice.VM.CreateVM:input_type -> vmservice.CreateVMRequest
-	76, // 85: vmservice.VM.TeardownVM:input_type -> google.protobuf.Empty
-	76, // 86: vmservice.VM.PauseVM:input_type -> google.protobuf.Empty
-	76, // 87: vmservice.VM.ResumeVM:input_type -> google.protobuf.Empty
-	76, // 88: vmservice.VM.WaitVM:input_type -> google.protobuf.Empty
-	76, // 89: vmservice.VM.CapabilitiesVM:input_type -> google.protobuf.Empty
-	53, // 90: vmservice.VM.PropertiesVM:input_type -> vmservice.PropertiesVMRequest
-	69, // 91: vmservice.VM.ModifyResource:input_type -> vmservice.ModifyResourceRequest
-	70, // 92: vmservice.VM.AddPcieDevice:input_type -> vmservice.AddPcieDeviceRequest
-	71, // 93: vmservice.VM.RemovePcieDevice:input_type -> vmservice.RemovePcieDeviceRequest
-	76, // 94: vmservice.VM.Quit:input_type -> google.protobuf.Empty
-	76, // 95: vmservice.VM.CreateVM:output_type -> google.protobuf.Empty
-	76, // 96: vmservice.VM.TeardownVM:output_type -> google.protobuf.Empty
-	76, // 97: vmservice.VM.PauseVM:output_type -> google.protobuf.Empty
-	76, // 98: vmservice.VM.ResumeVM:output_type -> google.protobuf.Empty
-	76, // 99: vmservice.VM.WaitVM:output_type -> google.protobuf.Empty
-	55, // 100: vmservice.VM.CapabilitiesVM:output_type -> vmservice.CapabilitiesVMResponse
-	54, // 101: vmservice.VM.PropertiesVM:output_type -> vmservice.PropertiesVMResponse
-	76, // 102: vmservice.VM.ModifyResource:output_type -> google.protobuf.Empty
-	76, // 103: vmservice.VM.AddPcieDevice:output_type -> google.protobuf.Empty
-	76, // 104: vmservice.VM.RemovePcieDevice:output_type -> google.protobuf.Empty
-	76, // 105: vmservice.VM.Quit:output_type -> google.protobuf.Empty
-	95, // [95:106] is the sub-list for method output_type
-	84, // [84:95] is the sub-list for method input_type
-	84, // [84:84] is the sub-list for extension type_name
-	84, // [84:84] is the sub-list for extension extendee
-	0,  // [0:84] is the sub-list for field type_name
+	67, // 6: vmservice.DevicesConfig.virtio_console:type_name -> vmservice.VirtioConsoleConfig
+	65, // 7: vmservice.DevicesConfig.virtiofs_aggregate:type_name -> vmservice.VirtioFSAggregateConfig
+	15, // 8: vmservice.PcieDeviceKind.virtio:type_name -> vmservice.VirtioDevice
+	31, // 9: vmservice.PcieDeviceKind.nvme:type_name -> vmservice.NvmeConfig
+	33, // 10: vmservice.PcieDeviceKind.vfio:type_name -> vmservice.VfioDevice
+	21, // 11: vmservice.VirtioDevice.blk:type_name -> vmservice.VirtioBlk
+	22, // 12: vmservice.VirtioDevice.net:type_name -> vmservice.VirtioNet
+	29, // 13: vmservice.VirtioDevice.rng:type_name -> vmservice.VirtioRng
+	30, // 14: vmservice.VirtioDevice.vsock:type_name -> vmservice.VirtioVsock
+	16, // 15: vmservice.VirtioDevice.console:type_name -> vmservice.VirtioConsole
+	24, // 16: vmservice.VirtioDevice.vhost_user:type_name -> vmservice.VhostUser
+	17, // 17: vmservice.VirtioConsole.backend:type_name -> vmservice.SerialBackend
+	18, // 18: vmservice.SerialBackend.relay:type_name -> vmservice.SerialRelay
+	20, // 19: vmservice.DiskBackend.file:type_name -> vmservice.FileDisk
+	19, // 20: vmservice.VirtioBlk.backend:type_name -> vmservice.DiskBackend
+	23, // 21: vmservice.VirtioNet.backend:type_name -> vmservice.NicBackend
+	59, // 22: vmservice.NicBackend.dio:type_name -> vmservice.DioBackend
+	60, // 23: vmservice.NicBackend.tap:type_name -> vmservice.TapBackend
+	62, // 24: vmservice.NicBackend.consomme:type_name -> vmservice.ConsommeBackend
+	25, // 25: vmservice.VhostUser.device:type_name -> vmservice.VhostUserDevice
+	26, // 26: vmservice.VhostUserDevice.blk:type_name -> vmservice.VhostUserBlk
+	27, // 27: vmservice.VhostUserDevice.fs:type_name -> vmservice.VhostUserFs
+	28, // 28: vmservice.VhostUserDevice.other:type_name -> vmservice.VhostUserGeneric
+	32, // 29: vmservice.NvmeConfig.namespaces:type_name -> vmservice.NvmeNamespace
+	19, // 30: vmservice.NvmeNamespace.backend:type_name -> vmservice.DiskBackend
+	34, // 31: vmservice.VfioDevice.bar_addresses:type_name -> vmservice.VfioBarAddress
+	78, // 32: vmservice.VfioBarAddress.host:type_name -> google.protobuf.Empty
+	36, // 33: vmservice.NumaConfig.nodes:type_name -> vmservice.NumaNode
+	39, // 34: vmservice.NumaConfig.distances:type_name -> vmservice.NumaDistance
+	38, // 35: vmservice.NumaNode.memory:type_name -> vmservice.NodeMemoryConfig
+	37, // 36: vmservice.NumaNode.vps:type_name -> vmservice.VpAssignment
+	42, // 37: vmservice.PcieTopologyConfig.root_complexes:type_name -> vmservice.PcieRootComplex
+	41, // 38: vmservice.PcieTopologyConfig.generic_initiators:type_name -> vmservice.PcieGenericInitiator
+	43, // 39: vmservice.PcieRootComplex.root_ports:type_name -> vmservice.PciePort
+	45, // 40: vmservice.PciePort.attached:type_name -> vmservice.PcieAttachment
+	43, // 41: vmservice.PcieSwitch.downstream_ports:type_name -> vmservice.PciePort
+	14, // 42: vmservice.PcieAttachment.device:type_name -> vmservice.PcieDeviceKind
+	44, // 43: vmservice.PcieAttachment.switch:type_name -> vmservice.PcieSwitch
+	11, // 44: vmservice.VMConfig.memory_config:type_name -> vmservice.MemoryConfig
+	12, // 45: vmservice.VMConfig.processor_config:type_name -> vmservice.ProcessorConfig
+	13, // 46: vmservice.VMConfig.devices_config:type_name -> vmservice.DevicesConfig
+	48, // 47: vmservice.VMConfig.serial_config:type_name -> vmservice.SerialConfig
+	9,  // 48: vmservice.VMConfig.direct_boot:type_name -> vmservice.DirectBoot
+	10, // 49: vmservice.VMConfig.uefi:type_name -> vmservice.UEFI
+	47, // 50: vmservice.VMConfig.windows_options:type_name -> vmservice.WindowsOptions
+	49, // 51: vmservice.VMConfig.hvsocket_config:type_name -> vmservice.HVSocketConfig
+	35, // 52: vmservice.VMConfig.numa_config:type_name -> vmservice.NumaConfig
+	40, // 53: vmservice.VMConfig.pcie:type_name -> vmservice.PcieTopologyConfig
+	75, // 54: vmservice.VMConfig.guest_power_actions:type_name -> vmservice.VMConfig.GuestPowerActions
+	76, // 55: vmservice.SerialConfig.ports:type_name -> vmservice.SerialConfig.Config
+	46, // 56: vmservice.CreateVMRequest.config:type_name -> vmservice.VMConfig
+	6,  // 57: vmservice.PropertiesVMRequest.types:type_name -> vmservice.PropertiesVMRequest.PropertiesType
+	51, // 58: vmservice.PropertiesVMResponse.memory_stats:type_name -> vmservice.MemoryStats
+	52, // 59: vmservice.PropertiesVMResponse.processor_stats:type_name -> vmservice.ProcessorStats
+	0,  // 60: vmservice.PropertiesVMResponse.state:type_name -> vmservice.VmState
+	77, // 61: vmservice.CapabilitiesVMResponse.supported_resources:type_name -> vmservice.CapabilitiesVMResponse.SupportedResource
+	8,  // 62: vmservice.CapabilitiesVMResponse.supported_guest_os:type_name -> vmservice.CapabilitiesVMResponse.SupportedGuestOS
+	2,  // 63: vmservice.SCSIDisk.type:type_name -> vmservice.DiskType
+	2,  // 64: vmservice.VPMEMDisk.type:type_name -> vmservice.DiskType
+	59, // 65: vmservice.NICConfig.dio:type_name -> vmservice.DioBackend
+	60, // 66: vmservice.NICConfig.tap:type_name -> vmservice.TapBackend
+	62, // 67: vmservice.NICConfig.consomme:type_name -> vmservice.ConsommeBackend
+	3,  // 68: vmservice.PortConfig.protocol:type_name -> vmservice.IpProtocol
+	61, // 69: vmservice.ConsommeBackend.ports:type_name -> vmservice.PortConfig
+	1,  // 70: vmservice.ModifyResourceRequest.type:type_name -> vmservice.ModifyType
+	69, // 71: vmservice.ModifyResourceRequest.processor:type_name -> vmservice.ModifyProcessorRequest
+	70, // 72: vmservice.ModifyResourceRequest.processor_config:type_name -> vmservice.ModifyProcessorConfigRequest
+	68, // 73: vmservice.ModifyResourceRequest.memory:type_name -> vmservice.ModifyMemoryRequest
+	56, // 74: vmservice.ModifyResourceRequest.scsi_disk:type_name -> vmservice.SCSIDisk
+	57, // 75: vmservice.ModifyResourceRequest.vpmem_disk:type_name -> vmservice.VPMEMDisk
+	58, // 76: vmservice.ModifyResourceRequest.nic_config:type_name -> vmservice.NICConfig
+	63, // 77: vmservice.ModifyResourceRequest.windows_device:type_name -> vmservice.WindowsPCIDevice
+	66, // 78: vmservice.ModifyResourceRequest.virtiofs_share:type_name -> vmservice.VirtioFSShare
+	14, // 79: vmservice.AddPcieDeviceRequest.device:type_name -> vmservice.PcieDeviceKind
+	4,  // 80: vmservice.UEFI.InitialVariables.secure_boot_template:type_name -> vmservice.UEFI.InitialVariables.SecureBootTemplate
+	5,  // 81: vmservice.VMConfig.GuestPowerActions.shutdown:type_name -> vmservice.VMConfig.GuestPowerAction
+	5,  // 82: vmservice.VMConfig.GuestPowerActions.reset:type_name -> vmservice.VMConfig.GuestPowerAction
+	5,  // 83: vmservice.VMConfig.GuestPowerActions.crash:type_name -> vmservice.VMConfig.GuestPowerAction
+	5,  // 84: vmservice.VMConfig.GuestPowerActions.watchdog:type_name -> vmservice.VMConfig.GuestPowerAction
+	7,  // 85: vmservice.CapabilitiesVMResponse.SupportedResource.resource:type_name -> vmservice.CapabilitiesVMResponse.Resource
+	50, // 86: vmservice.VM.CreateVM:input_type -> vmservice.CreateVMRequest
+	78, // 87: vmservice.VM.TeardownVM:input_type -> google.protobuf.Empty
+	78, // 88: vmservice.VM.PauseVM:input_type -> google.protobuf.Empty
+	78, // 89: vmservice.VM.ResumeVM:input_type -> google.protobuf.Empty
+	78, // 90: vmservice.VM.WaitVM:input_type -> google.protobuf.Empty
+	78, // 91: vmservice.VM.CapabilitiesVM:input_type -> google.protobuf.Empty
+	53, // 92: vmservice.VM.PropertiesVM:input_type -> vmservice.PropertiesVMRequest
+	71, // 93: vmservice.VM.ModifyResource:input_type -> vmservice.ModifyResourceRequest
+	72, // 94: vmservice.VM.AddPcieDevice:input_type -> vmservice.AddPcieDeviceRequest
+	73, // 95: vmservice.VM.RemovePcieDevice:input_type -> vmservice.RemovePcieDeviceRequest
+	78, // 96: vmservice.VM.Quit:input_type -> google.protobuf.Empty
+	78, // 97: vmservice.VM.CreateVM:output_type -> google.protobuf.Empty
+	78, // 98: vmservice.VM.TeardownVM:output_type -> google.protobuf.Empty
+	78, // 99: vmservice.VM.PauseVM:output_type -> google.protobuf.Empty
+	78, // 100: vmservice.VM.ResumeVM:output_type -> google.protobuf.Empty
+	78, // 101: vmservice.VM.WaitVM:output_type -> google.protobuf.Empty
+	55, // 102: vmservice.VM.CapabilitiesVM:output_type -> vmservice.CapabilitiesVMResponse
+	54, // 103: vmservice.VM.PropertiesVM:output_type -> vmservice.PropertiesVMResponse
+	78, // 104: vmservice.VM.ModifyResource:output_type -> google.protobuf.Empty
+	78, // 105: vmservice.VM.AddPcieDevice:output_type -> google.protobuf.Empty
+	78, // 106: vmservice.VM.RemovePcieDevice:output_type -> google.protobuf.Empty
+	78, // 107: vmservice.VM.Quit:output_type -> google.protobuf.Empty
+	97, // [97:108] is the sub-list for method output_type
+	86, // [86:97] is the sub-list for method input_type
+	86, // [86:86] is the sub-list for extension type_name
+	86, // [86:86] is the sub-list for extension extendee
+	0,  // [0:86] is the sub-list for field type_name
 }
 
 func init() { file_vmservice_proto_init() }
@@ -5803,7 +5957,7 @@ func file_vmservice_proto_init() {
 		(*TapBackend_Name)(nil),
 		(*TapBackend_FdName)(nil),
 	}
-	file_vmservice_proto_msgTypes[60].OneofWrappers = []any{
+	file_vmservice_proto_msgTypes[62].OneofWrappers = []any{
 		(*ModifyResourceRequest_Processor)(nil),
 		(*ModifyResourceRequest_ProcessorConfig)(nil),
 		(*ModifyResourceRequest_Memory)(nil),
@@ -5811,6 +5965,7 @@ func file_vmservice_proto_init() {
 		(*ModifyResourceRequest_VpmemDisk)(nil),
 		(*ModifyResourceRequest_NicConfig)(nil),
 		(*ModifyResourceRequest_WindowsDevice)(nil),
+		(*ModifyResourceRequest_VirtiofsShare)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
@@ -5818,7 +5973,7 @@ func file_vmservice_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_vmservice_proto_rawDesc), len(file_vmservice_proto_rawDesc)),
 			NumEnums:      9,
-			NumMessages:   67,
+			NumMessages:   69,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -36,3 +36,25 @@ func TestVirtioFSConfigReadOnlyWireEncoding(t *testing.T) {
 		t.Fatalf("default VirtioFSConfig wire bytes = %x, want no fields", wire)
 	}
 }
+
+// OpenVMM reads the share from ModifyResourceRequest field 9.
+func TestVirtioFSShareWireEncoding(t *testing.T) {
+	in := &ModifyResourceRequest{
+		Type: ModifyType_ADD,
+		Resource: &ModifyResourceRequest_VirtiofsShare{VirtiofsShare: &VirtioFSShare{
+			Name: "2", RootPath: `C:\data\`, ReadOnly: true, AllowedNames: []string{"a.txt"},
+		}},
+	}
+	b, err := proto.Marshal(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out ModifyResourceRequest
+	if err := proto.Unmarshal(b, &out); err != nil {
+		t.Fatal(err)
+	}
+	got := out.GetVirtiofsShare()
+	if got.GetName() != "2" || !got.GetReadOnly() || len(got.GetAllowedNames()) != 1 {
+		t.Fatalf("round trip = %+v", got)
+	}
+}
