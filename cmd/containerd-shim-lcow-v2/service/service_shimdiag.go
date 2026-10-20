@@ -28,7 +28,7 @@ func (s *Service) DiagExecInHost(ctx context.Context, request *shimdiag.ExecProc
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.Args, strings.Join(request.Args, " ")),
 		attribute.String(logfields.Workdir, request.Workdir),
 		attribute.Bool(logfields.Terminal, request.Terminal),
@@ -37,7 +37,7 @@ func (s *Service) DiagExecInHost(ctx context.Context, request *shimdiag.ExecProc
 		attribute.String(logfields.Stderr, request.Stderr))
 
 	// Set the sandbox ID in the logger context for all subsequent logs in this request.
-	ctx, _ = log.WithContext(ctx, logrus.WithField(logfields.SandboxID, s.sandboxID))
+	ctx, _ = log.WithContext(ctx, logrus.WithField(logfields.SandboxID, s.getSandboxID()))
 
 	r, e := s.diagExecInHostInternal(ctx, request)
 	return r, errgrpc.ToGRPC(e)
@@ -51,11 +51,11 @@ func (s *Service) DiagTasks(ctx context.Context, request *shimdiag.TasksRequest)
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.Bool(logfields.Execs, request.Execs))
 
 	// Set the sandbox ID in the logger context for all subsequent logs in this request.
-	ctx, _ = log.WithContext(ctx, logrus.WithField(logfields.SandboxID, s.sandboxID))
+	ctx, _ = log.WithContext(ctx, logrus.WithField(logfields.SandboxID, s.getSandboxID()))
 
 	r, e := s.diagTasksInternal(ctx, request)
 	return r, errgrpc.ToGRPC(e)
@@ -69,13 +69,13 @@ func (s *Service) DiagShare(ctx context.Context, request *shimdiag.ShareRequest)
 	defer func() { ot.SetSpanStatus(span, err) }()
 
 	span.SetAttributes(
-		attribute.String(logfields.SandboxID, s.sandboxID),
+		attribute.String(logfields.SandboxID, s.getSandboxID()),
 		attribute.String(logfields.HostPath, request.HostPath),
 		attribute.String(logfields.UVMPath, request.UvmPath),
 		attribute.Bool(logfields.ReadOnly, request.ReadOnly))
 
 	// Set the sandbox ID in the logger context for all subsequent logs in this request.
-	ctx, _ = log.WithContext(ctx, logrus.WithField(logfields.SandboxID, s.sandboxID))
+	ctx, _ = log.WithContext(ctx, logrus.WithField(logfields.SandboxID, s.getSandboxID()))
 
 	r, e := s.diagShareInternal(ctx, request)
 	return r, errgrpc.ToGRPC(e)
@@ -88,10 +88,10 @@ func (s *Service) DiagStacks(ctx context.Context, _ *shimdiag.StacksRequest) (re
 	defer span.End()
 	defer func() { ot.SetSpanStatus(span, err) }()
 
-	span.SetAttributes(attribute.String(logfields.SandboxID, s.sandboxID))
+	span.SetAttributes(attribute.String(logfields.SandboxID, s.getSandboxID()))
 
 	// Set the sandbox ID in the logger context for all subsequent logs in this request.
-	ctx, _ = log.WithContext(ctx, logrus.WithField(logfields.SandboxID, s.sandboxID))
+	ctx, _ = log.WithContext(ctx, logrus.WithField(logfields.SandboxID, s.getSandboxID()))
 
 	r, e := s.diagStacksInternal(ctx)
 	return r, errgrpc.ToGRPC(e)
@@ -103,7 +103,7 @@ func (s *Service) DiagPid(ctx context.Context, _ *shimdiag.PidRequest) (resp *sh
 	defer span.End()
 	defer func() { ot.SetSpanStatus(span, err) }()
 
-	span.SetAttributes(attribute.String(logfields.SandboxID, s.sandboxID))
+	span.SetAttributes(attribute.String(logfields.SandboxID, s.getSandboxID()))
 
 	return &shimdiag.PidResponse{
 		Pid: int32(os.Getpid()),

@@ -10,6 +10,7 @@ import (
 
 	"github.com/Microsoft/hcsshim/internal/controller/linuxcontainer"
 	"github.com/Microsoft/hcsshim/internal/controller/pod/mocks"
+	"github.com/Microsoft/hcsshim/internal/vm/guestmanager"
 )
 
 const (
@@ -206,6 +207,31 @@ func TestNewContainer_WhileMigrating(t *testing.T) {
 	}
 	if len(c.containers) != 0 {
 		t.Error("expected no container to be registered while migrating")
+	}
+}
+
+// TestUpdateMemoryLimit verifies that a pod memory limit goes to the guest and
+// that an invalid limit or a migrating pod is rejected before any guest call
+// (the strict mock fails otherwise).
+func TestUpdateMemoryLimit(t *testing.T) {
+	vm, _, c := newSetup(t)
+	// A guest without a connection returns ErrGuestConnectionUnavailable from the RPC.
+	vm.EXPECT().Guest().Return(&guestmanager.Guest{})
+	if err := c.UpdateMemoryLimit(t.Context(), 134217728); !errors.Is(err, guestmanager.ErrGuestConnectionUnavailable) {
+		t.Fatalf("UpdateMemoryLimit error = %v, want ErrGuestConnectionUnavailable", err)
+	}
+
+	for _, limit := range []int64{0, -1, -2} {
+		_, _, invalidController := newSetup(t)
+		if err := invalidController.UpdateMemoryLimit(t.Context(), limit); err == nil {
+			t.Fatalf("UpdateMemoryLimit(%d) succeeded, want invalid-limit error", limit)
+		}
+	}
+
+	_, _, c = newSetup(t)
+	c.isMigrating = true
+	if err := c.UpdateMemoryLimit(t.Context(), 134217728); err == nil {
+		t.Fatal("expected error updating a migrating pod")
 	}
 }
 

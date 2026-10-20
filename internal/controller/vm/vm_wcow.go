@@ -23,6 +23,20 @@ import (
 // For WCOW, no additional controllers are needed as of now (VSMB will be added later).
 type platformControllers struct{} //nolint:unused // embedded in Controller for cross-platform compatibility with LCOW
 
+func (c *Controller) rejectUnsupportedMigration(string) error { return nil }
+
+func (c *Controller) createColdVM(ctx context.Context, opts *CreateOptions) (*coldCreateResult, error) {
+	doc, err := c.buildHCSConfig(ctx, opts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build VM config: %w", err)
+	}
+	uvm, err := vmmanager.Create(ctx, opts.ID, doc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create VM: %w", err)
+	}
+	return &coldCreateResult{uvm: uvm, hcsDocument: doc}, nil
+}
+
 func (c *Controller) updateGuestMemoryLimits(context.Context) error { return nil }
 
 // buildHCSConfig builds the HCS document for a WCOW VM.

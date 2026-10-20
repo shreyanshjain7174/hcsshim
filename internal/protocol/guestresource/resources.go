@@ -1,6 +1,9 @@
 package guestresource
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/Microsoft/hcsshim/internal/protocol/guestrequest"
 	"github.com/opencontainers/runtime-spec/specs-go"
 
@@ -19,6 +22,8 @@ const (
 	// ResourceTypeMappedDirectory is the modify resource type for mapped
 	// directories
 	ResourceTypeMappedDirectory guestrequest.ResourceType = "MappedDirectory"
+	// ResourceTypeMappedVirtioFS mounts a child of the aggregate virtio-fs device.
+	ResourceTypeMappedVirtioFS guestrequest.ResourceType = "MappedVirtioFS"
 	// ResourceTypeSCSIDevice is the modify resources type for SCSI devices.
 	// Note this type is not related to mounting a device in the guest, only
 	// for operations on the SCSI device itself.
@@ -57,6 +62,9 @@ const (
 	ResourceTypePolicyFragment guestrequest.ResourceType = "SecurityPolicyFragment"
 	// ResourceTypePodCgroupMemoryLimit is used to force a cgroup memory limit update in the guest.
 	ResourceTypePodCgroupMemoryLimit guestrequest.ResourceType = "PodCgroupMemoryLimit"
+	// ResourceTypePodMemoryLimit sets the memory limit of one pod's cgroup.
+	// Unlike ResourceTypePodCgroupMemoryLimit it never touches the shared pods budget.
+	ResourceTypePodMemoryLimit guestrequest.ResourceType = "PodMemoryLimit"
 )
 
 // This class is used by a modify request to add or remove a combined layers
@@ -141,6 +149,17 @@ type LCOWMappedDirectory struct {
 	ReadOnly  bool   `json:"ReadOnly,omitempty"`
 }
 
+// VirtioFSAggregateTag is the guest tag of the OpenVMM aggregate virtio-fs device.
+const VirtioFSAggregateTag = "hcsshim-shares"
+
+// LCOWMappedVirtioFS is a child of the aggregate virtio-fs device mounted in the guest.
+type LCOWMappedVirtioFS struct {
+	Tag       string `json:"Tag,omitempty"`
+	ShareName string `json:"ShareName,omitempty"`
+	MountPath string `json:"MountPath,omitempty"`
+	ReadOnly  bool   `json:"ReadOnly,omitempty"`
+}
+
 // LCOWVPMemMappingInfo is one of potentially multiple read-only layers mapped on a VPMem device
 type LCOWVPMemMappingInfo struct {
 	DeviceOffsetInBytes uint64 `json:"DeviceOffsetInBytes,omitempty"`
@@ -217,6 +236,37 @@ type LCOWRoute struct {
 type LCOWContainerConstraints struct {
 	Windows specs.WindowsResources `json:",omitempty"`
 	Linux   specs.LinuxResources   `json:",omitempty"`
+}
+
+// LCOWPodMemoryLimit sets the memory limit of the cgroup of a single pod
+// registered in the guest.
+type LCOWPodMemoryLimit struct {
+	PodID string `json:",omitempty"`
+	// LimitInBytes is a finite, positive byte count.
+	LimitInBytes *int64 `json:",omitempty"`
+}
+
+// ValidatePodMemoryLimitInBytes rejects anything but a finite, positive byte
+// count. OCI's -1 (unlimited) is rejected: cgroup v2 spells it "max".
+func ValidatePodMemoryLimitInBytes(limit int64) error {
+	if limit <= 0 {
+		return fmt.Errorf("invalid pod memory limit %d: must be a positive byte count (unlimited is not supported)", limit)
+	}
+	return nil
+}
+
+// Validate rejects missing settings, an empty PodID and a missing or invalid limit.
+func (s *LCOWPodMemoryLimit) Validate() error {
+	if s == nil {
+		return errors.New("pod memory limit settings are missing")
+	}
+	if s.PodID == "" {
+		return errors.New("pod memory limit settings have an empty PodID")
+	}
+	if s.LimitInBytes == nil {
+		return fmt.Errorf("pod memory limit settings for pod %q have no LimitInBytes", s.PodID)
+	}
+	return ValidatePodMemoryLimitInBytes(*s.LimitInBytes)
 }
 
 // SignalProcessOptionsLCOW is the options passed to LCOW to signal a given

@@ -77,7 +77,7 @@ func (s *Service) importSandboxInternal(ctx context.Context, request *migration.
 		return nil, fmt.Errorf("destination: import migration state: %w", err)
 	}
 
-	s.sandboxID = request.SandboxID
+	s.setSandboxID(request.SandboxID)
 	return &migration.ImportSandboxResponse{}, nil
 }
 

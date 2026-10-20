@@ -13,9 +13,10 @@ import (
 
 	"github.com/Microsoft/hcsshim/cmd/containerd-shim-lcow-v2/service/mocks"
 	"github.com/Microsoft/hcsshim/cmd/containerd-shim-runhcs-v1/stats"
+	"github.com/Microsoft/hcsshim/internal/controller/pod"
 	"github.com/Microsoft/hcsshim/internal/controller/vm"
-	hcsschema "github.com/Microsoft/hcsshim/internal/hcs/schema2"
 	"github.com/Microsoft/hcsshim/internal/protocol/guestresource"
+	"github.com/Microsoft/hcsshim/internal/vm/guestmanager"
 	"github.com/Microsoft/hcsshim/pkg/annotations"
 	"github.com/Microsoft/hcsshim/pkg/ctrdtaskapi"
 
@@ -27,12 +28,7 @@ import (
 
 // Sentinel errors used by the task tests to assert that the service wraps and
 // propagates errors from the underlying vm controller.
-var (
-	errVMUpdatePolicy   = errors.New("vm update policy failed")
-	errVMUpdateMemory   = errors.New("vm update memory failed")
-	errVMUpdateCPU      = errors.New("vm update cpu failed")
-	errVMUpdateCPUGroup = errors.New("vm update cpu group failed")
-)
+var errVMUpdatePolicy = errors.New("vm update policy failed")
 
 // ─── ensureVMRunning guard ────────────────────────────────────────────────
 
@@ -291,90 +287,116 @@ func TestUpdate_PolicyFragmentDispatch(t *testing.T) {
 	}
 }
 
-// TestUpdate_MemoryDispatch verifies that a LinuxResources update with a
-// memory limit is converted to MiB and forwarded to vmController.UpdateMemory.
-// The conversion is critical: a regression that forgets the divide would
-// request gigabyte-scale memory in MiB and trigger HCS validation failures.
-func TestUpdate_MemoryDispatch(t *testing.T) {
-	t.Parallel()
-
-	const memoryBytes = int64(2 * 1024 * 1024 * 1024) // 2 GiB
-	const wantMiB = uint64(2 * 1024)
-
-	svc, mockCtrl := newTestService(t)
-	svc.podControllers["pod-1"] = nil
-
-	limit := memoryBytes
-	any, err := typeurl.MarshalAnyToProto(&specs.LinuxResources{
-		Memory: &specs.LinuxMemory{Limit: &limit},
-	})
-	if err != nil {
-		t.Fatalf("marshal resources: %v", err)
-	}
-
-	mockCtrl.EXPECT().State().Return(vm.StateRunning)
-	mockCtrl.EXPECT().UpdateMemory(gomock.Any(), wantMiB).Return(nil)
-
-	if _, err := svc.updateInternal(context.Background(), &task.UpdateTaskRequest{
-		ID:        "pod-1",
-		Resources: any,
-	}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+// addTestPod registers a real pod controller backed by the mock VM controller.
+func addTestPod(svc *Service, mockCtrl *mocks.MockvmController) {
+	mockCtrl.EXPECT().NetworkController(gomock.Any()).Return(nil)
+	svc.podControllers["pod-1"] = pod.New("pod-1", "", mockCtrl)
 }
 
-// TestUpdate_CPUDispatch verifies that a LinuxResources update with CPU
-// quota+shares is mapped to ProcessorLimits{Limit, Weight} and forwarded.
-func TestUpdate_CPUDispatch(t *testing.T) {
-	t.Parallel()
-	svc, mockCtrl := newTestService(t)
-	svc.podControllers["pod-1"] = nil
+func int64p(v int64) *int64 { return &v }
 
-	quota := int64(50000)
-	shares := uint64(1024)
-	any, err := typeurl.MarshalAnyToProto(&specs.LinuxResources{
-		CPU: &specs.LinuxCPU{Quota: &quota, Shares: &shares},
-	})
-	if err != nil {
-		t.Fatalf("marshal resources: %v", err)
-	}
-
-	wantLimits := &hcsschema.ProcessorLimits{Limit: 50000, Weight: 1024}
-
-	mockCtrl.EXPECT().State().Return(vm.StateRunning)
-	mockCtrl.EXPECT().UpdateCPU(gomock.Any(), wantLimits).Return(nil)
-
-	if _, err := svc.updateInternal(context.Background(), &task.UpdateTaskRequest{
-		ID:        "pod-1",
-		Resources: any,
-	}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
+func memoryLimitResources(limit int64) *specs.LinuxResources {
+	return &specs.LinuxResources{Memory: &specs.LinuxMemory{Limit: &limit}}
 }
 
-// TestUpdate_CPUGroupAnnotation verifies that the CPUGroupID annotation is
-// pulled out of the request and forwarded to vmController.UpdateCPUGroup.
-// LinuxResources alone does not carry this value — it lives in annotations.
-func TestUpdate_CPUGroupAnnotation(t *testing.T) {
-	t.Parallel()
-	svc, mockCtrl := newTestService(t)
-	svc.podControllers["pod-1"] = nil
-
-	// Empty LinuxResources so we exercise the annotation branch alone.
-	any, err := typeurl.MarshalAnyToProto(&specs.LinuxResources{})
+// updatePod sends resources for pod-1; the strict mock fails on any VM or
+// Guest call the caller did not expect.
+func updatePod(t *testing.T, svc *Service, res *specs.LinuxResources, annots map[string]string) error {
+	t.Helper()
+	any, err := typeurl.MarshalAnyToProto(res)
 	if err != nil {
 		t.Fatalf("marshal resources: %v", err)
 	}
-
-	mockCtrl.EXPECT().State().Return(vm.StateRunning)
-	mockCtrl.EXPECT().UpdateCPUGroup(gomock.Any(), "cpu-group-42").Return(nil)
-
-	if _, err := svc.updateInternal(context.Background(), &task.UpdateTaskRequest{
+	_, err = svc.updateInternal(context.Background(), &task.UpdateTaskRequest{
 		ID:          "pod-1",
 		Resources:   any,
-		Annotations: map[string]string{annotations.CPUGroupID: "cpu-group-42"},
-	}); err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		Annotations: annots,
+	})
+	return err
+}
+
+// TestUpdate_PodMemoryLimitRoutesToPod verifies that a pod memory limit goes
+// to the pod's guest cgroup, not the VM: the strict mock fails on any
+// UpdateMemory/UpdateCPU/UpdateCPUGroup call, and the guest RPC error proves
+// the pod path ran.
+func TestUpdate_PodMemoryLimitRoutesToPod(t *testing.T) {
+	t.Parallel()
+	svc, mockCtrl := newTestService(t)
+	addTestPod(svc, mockCtrl)
+	mockCtrl.EXPECT().State().Return(vm.StateRunning)
+	mockCtrl.EXPECT().Guest().Return(&guestmanager.Guest{})
+
+	if err := updatePod(t, svc, memoryLimitResources(134217728), nil); !errors.Is(err, guestmanager.ErrGuestConnectionUnavailable) {
+		t.Fatalf("expected pod guest update error, got %v", err)
+	}
+}
+
+// TestUpdate_PodCPUGroupRejected verifies that the VM-wide CPUGroupID
+// annotation is rejected on a pod update before any VM or guest call, even
+// with an otherwise valid memory limit.
+func TestUpdate_PodCPUGroupRejected(t *testing.T) {
+	t.Parallel()
+	svc, mockCtrl := newTestService(t)
+	addTestPod(svc, mockCtrl)
+	mockCtrl.EXPECT().State().Return(vm.StateRunning)
+
+	err := updatePod(t, svc, memoryLimitResources(134217728), map[string]string{annotations.CPUGroupID: "cpu-group-42"})
+	if !errors.Is(err, errdefs.ErrInvalidArgument) || !strings.Contains(err.Error(), annotations.CPUGroupID) {
+		t.Fatalf("expected InvalidArgument naming %s, got %v", annotations.CPUGroupID, err)
+	}
+}
+
+// TestUpdate_PodUnsupportedResourcesRejected verifies that anything other
+// than exactly a valid memory limit is rejected before any VM or guest call.
+func TestUpdate_PodUnsupportedResourcesRejected(t *testing.T) {
+	t.Parallel()
+	withLimit := func(mutate func(r *specs.LinuxResources)) *specs.LinuxResources {
+		r := memoryLimitResources(134217728)
+		mutate(r)
+		return r
+	}
+	shares := uint64(1024)
+	swappiness := uint64(10)
+	flag := true
+	for _, tc := range []struct {
+		name string
+		res  *specs.LinuxResources
+	}{
+		{"cpu quota", withLimit(func(r *specs.LinuxResources) { r.CPU = &specs.LinuxCPU{Quota: int64p(50000)} })},
+		{"cpu shares", withLimit(func(r *specs.LinuxResources) { r.CPU = &specs.LinuxCPU{Shares: &shares} })},
+		{"empty cpu", withLimit(func(r *specs.LinuxResources) { r.CPU = &specs.LinuxCPU{} })},
+		{"devices", withLimit(func(r *specs.LinuxResources) { r.Devices = []specs.LinuxDeviceCgroup{{Allow: true, Access: "rwm"}} })},
+		{"pids", withLimit(func(r *specs.LinuxResources) { r.Pids = &specs.LinuxPids{} })},
+		{"blockio", withLimit(func(r *specs.LinuxResources) { r.BlockIO = &specs.LinuxBlockIO{} })},
+		{"hugepages", withLimit(func(r *specs.LinuxResources) { r.HugepageLimits = []specs.LinuxHugepageLimit{{Pagesize: "2MB"}} })},
+		{"network", withLimit(func(r *specs.LinuxResources) { r.Network = &specs.LinuxNetwork{} })},
+		{"rdma", withLimit(func(r *specs.LinuxResources) { r.Rdma = map[string]specs.LinuxRdma{"mlx": {}} })},
+		{"unified", withLimit(func(r *specs.LinuxResources) { r.Unified = map[string]string{"memory.high": "1"} })},
+		{"memory reservation", withLimit(func(r *specs.LinuxResources) { r.Memory.Reservation = int64p(1) })},
+		{"memory swap", withLimit(func(r *specs.LinuxResources) { r.Memory.Swap = int64p(134217728) })},
+		{"memory kernel", withLimit(func(r *specs.LinuxResources) {
+			r.Memory.Kernel = int64p(1) //nolint:staticcheck // Verify deprecated input is rejected explicitly.
+		})},
+		{"memory kernelTCP", withLimit(func(r *specs.LinuxResources) { r.Memory.KernelTCP = int64p(1) })},
+		{"memory swappiness", withLimit(func(r *specs.LinuxResources) { r.Memory.Swappiness = &swappiness })},
+		{"memory disableOOMKiller", withLimit(func(r *specs.LinuxResources) { r.Memory.DisableOOMKiller = &flag })},
+		{"memory useHierarchy", withLimit(func(r *specs.LinuxResources) { r.Memory.UseHierarchy = &flag })},
+		{"memory checkBeforeUpdate", withLimit(func(r *specs.LinuxResources) { r.Memory.CheckBeforeUpdate = &flag })},
+		{"empty resources", &specs.LinuxResources{}},
+		{"nil memory limit", &specs.LinuxResources{Memory: &specs.LinuxMemory{}}},
+		{"zero limit", memoryLimitResources(0)},
+		{"unlimited -1", memoryLimitResources(-1)},
+		{"negative limit", memoryLimitResources(-2)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, mockCtrl := newTestService(t)
+			addTestPod(svc, mockCtrl)
+			mockCtrl.EXPECT().State().Return(vm.StateRunning)
+
+			if err := updatePod(t, svc, tc.res, nil); !errors.Is(err, errdefs.ErrInvalidArgument) {
+				t.Fatalf("expected InvalidArgument, got %v", err)
+			}
+		})
 	}
 }
 
@@ -403,92 +425,6 @@ func TestUpdate_PolicyFragmentFailure(t *testing.T) {
 	}
 	if !errors.Is(gotErr, errVMUpdatePolicy) {
 		t.Errorf("expected error to wrap errVMUpdatePolicy, got %v", gotErr)
-	}
-}
-
-// TestUpdate_MemoryFailure verifies that memory-update failures are wrapped.
-func TestUpdate_MemoryFailure(t *testing.T) {
-	t.Parallel()
-	svc, mockCtrl := newTestService(t)
-	svc.podControllers["pod-1"] = nil
-
-	limit := int64(1024 * 1024 * 1024)
-	any, err := typeurl.MarshalAnyToProto(&specs.LinuxResources{
-		Memory: &specs.LinuxMemory{Limit: &limit},
-	})
-	if err != nil {
-		t.Fatalf("marshal resources: %v", err)
-	}
-
-	mockCtrl.EXPECT().State().Return(vm.StateRunning)
-	mockCtrl.EXPECT().UpdateMemory(gomock.Any(), gomock.Any()).Return(errVMUpdateMemory)
-
-	_, gotErr := svc.updateInternal(context.Background(), &task.UpdateTaskRequest{
-		ID:        "pod-1",
-		Resources: any,
-	})
-	if gotErr == nil {
-		t.Fatal("expected error from UpdateMemory, got nil")
-	}
-	if !errors.Is(gotErr, errVMUpdateMemory) {
-		t.Errorf("expected error to wrap errVMUpdateMemory, got %v", gotErr)
-	}
-}
-
-// TestUpdate_CPUFailure verifies that CPU-update failures are wrapped.
-func TestUpdate_CPUFailure(t *testing.T) {
-	t.Parallel()
-	svc, mockCtrl := newTestService(t)
-	svc.podControllers["pod-1"] = nil
-
-	quota := int64(10000)
-	any, err := typeurl.MarshalAnyToProto(&specs.LinuxResources{
-		CPU: &specs.LinuxCPU{Quota: &quota},
-	})
-	if err != nil {
-		t.Fatalf("marshal resources: %v", err)
-	}
-
-	mockCtrl.EXPECT().State().Return(vm.StateRunning)
-	mockCtrl.EXPECT().UpdateCPU(gomock.Any(), gomock.Any()).Return(errVMUpdateCPU)
-
-	_, gotErr := svc.updateInternal(context.Background(), &task.UpdateTaskRequest{
-		ID:        "pod-1",
-		Resources: any,
-	})
-	if gotErr == nil {
-		t.Fatal("expected error from UpdateCPU, got nil")
-	}
-	if !errors.Is(gotErr, errVMUpdateCPU) {
-		t.Errorf("expected error to wrap errVMUpdateCPU, got %v", gotErr)
-	}
-}
-
-// TestUpdate_CPUGroupFailure verifies that CPU-group-update failures are
-// wrapped.
-func TestUpdate_CPUGroupFailure(t *testing.T) {
-	t.Parallel()
-	svc, mockCtrl := newTestService(t)
-	svc.podControllers["pod-1"] = nil
-
-	any, err := typeurl.MarshalAnyToProto(&specs.LinuxResources{})
-	if err != nil {
-		t.Fatalf("marshal resources: %v", err)
-	}
-
-	mockCtrl.EXPECT().State().Return(vm.StateRunning)
-	mockCtrl.EXPECT().UpdateCPUGroup(gomock.Any(), "cpu-group-42").Return(errVMUpdateCPUGroup)
-
-	_, gotErr := svc.updateInternal(context.Background(), &task.UpdateTaskRequest{
-		ID:          "pod-1",
-		Resources:   any,
-		Annotations: map[string]string{annotations.CPUGroupID: "cpu-group-42"},
-	})
-	if gotErr == nil {
-		t.Fatal("expected error from UpdateCPUGroup, got nil")
-	}
-	if !errors.Is(gotErr, errVMUpdateCPUGroup) {
-		t.Errorf("expected error to wrap errVMUpdateCPUGroup, got %v", gotErr)
 	}
 }
 

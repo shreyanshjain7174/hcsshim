@@ -42,14 +42,14 @@ type vmController interface {
 	// SandboxOptions returns the parsed LCOW sandbox options for the VM.
 	SandboxOptions() *lcow.SandboxOptions
 
-	// CreateVM builds the HCS document and creates the underlying utility VM.
+	// CreateVM creates the underlying utility VM.
 	CreateVM(ctx context.Context, opts *vm.CreateOptions) error
 
-	// StartVM starts the underlying HCS compute system and establishes the
+	// StartVM starts the underlying compute system and establishes the
 	// Guest Compute Service (GCS) connection.
 	StartVM(ctx context.Context, opts *vm.StartOptions) error
 
-	// TerminateVM forcefully terminates the VM and releases its HCS handle.
+	// TerminateVM terminates the VM and releases its resources.
 	TerminateVM(ctx context.Context) error
 
 	// Wait blocks until the VM exits or ctx is cancelled.

@@ -21,3 +21,20 @@ func (gm *Guest) UpdateCgroupMemoryLimits(ctx context.Context) error {
 	}
 	return nil
 }
+
+// UpdatePodMemoryLimit sets the memory limit of a single pod's cgroup in the guest.
+func (gm *Guest) UpdatePodMemoryLimit(ctx context.Context, podID string, limitInBytes int64) error {
+	settings := &guestresource.LCOWPodMemoryLimit{PodID: podID, LimitInBytes: &limitInBytes}
+	if err := settings.Validate(); err != nil {
+		return err
+	}
+	request := guestrequest.ModificationRequest{
+		ResourceType: guestresource.ResourceTypePodMemoryLimit,
+		RequestType:  guestrequest.RequestTypeUpdate,
+		Settings:     settings,
+	}
+	if err := gm.modify(ctx, request); err != nil {
+		return fmt.Errorf("failed to update memory limit for pod %s: %w", podID, err)
+	}
+	return nil
+}

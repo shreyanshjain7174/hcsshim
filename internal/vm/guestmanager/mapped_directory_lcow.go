@@ -44,3 +44,29 @@ func (gm *Guest) RemoveMappedDirectory(ctx context.Context, settings guestresour
 	}
 	return nil
 }
+
+// AddMappedVirtioFS mounts a virtio-fs share in the guest.
+func (gm *Guest) AddMappedVirtioFS(ctx context.Context, settings guestresource.LCOWMappedVirtioFS) error {
+	request := &hcsschema.ModifySettingRequest{GuestRequest: guestrequest.ModificationRequest{
+		ResourceType: guestresource.ResourceTypeMappedVirtioFS,
+		RequestType:  guestrequest.RequestTypeAdd,
+		Settings:     settings,
+	}}
+	if err := gm.modify(ctx, request.GuestRequest); err != nil {
+		return fmt.Errorf("failed to add mapped virtio-fs share for lcow: %w", err)
+	}
+	return nil
+}
+
+// RemoveMappedVirtioFS unmounts a virtio-fs share from the guest.
+func (gm *Guest) RemoveMappedVirtioFS(ctx context.Context, settings guestresource.LCOWMappedVirtioFS) error {
+	request := &hcsschema.ModifySettingRequest{GuestRequest: guestrequest.ModificationRequest{
+		ResourceType: guestresource.ResourceTypeMappedVirtioFS,
+		RequestType:  guestrequest.RequestTypeRemove,
+		Settings:     settings,
+	}}
+	if err := gm.modify(ctx, request.GuestRequest); err != nil {
+		return fmt.Errorf("failed to remove mapped virtio-fs share for lcow: %w", err)
+	}
+	return nil
+}

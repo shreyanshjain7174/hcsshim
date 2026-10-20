@@ -1003,6 +1003,11 @@ func (h *Host) modifyHostSettings(ctx context.Context, containerID string, req *
 		}
 
 		return h.modifyMappedDirectory(ctx, h.vsock, req.RequestType, req.Settings.(*guestresource.LCOWMappedDirectory))
+	case guestresource.ResourceTypeMappedVirtioFS:
+		if err := h.checkState(); err != nil {
+			return err
+		}
+		return h.modifyMappedVirtioFS(ctx, req.RequestType, req.Settings.(*guestresource.LCOWMappedVirtioFS))
 	case guestresource.ResourceTypeVPMemDevice:
 		if err := h.checkState(); err != nil {
 			return err
@@ -1061,9 +1066,38 @@ func (h *Host) modifyHostSettings(ctx context.Context, containerID string, req *
 		default:
 			return newInvalidRequestTypeError(req.RequestType)
 		}
+	case guestresource.ResourceTypePodMemoryLimit:
+		if req.RequestType != guestrequest.RequestTypeUpdate {
+			return newInvalidRequestTypeError(req.RequestType)
+		}
+		pm, ok := req.Settings.(*guestresource.LCOWPodMemoryLimit)
+		if !ok {
+			return errors.Errorf("the request's settings are not of type LCOWPodMemoryLimit: %T", req.Settings)
+		}
+		if err := pm.Validate(); err != nil {
+			return errors.Wrap(err, "invalid pod memory limit request")
+		}
+		return h.updatePodMemoryLimit(pm.PodID, *pm.LimitInBytes)
 	default:
 		return errors.Errorf("the ResourceType %q is not supported for UVM", req.ResourceType)
 	}
+}
+
+// updatePodMemoryLimit writes only Memory.Limit to the cgroup of the registered pod podID.
+func (h *Host) updatePodMemoryLimit(podID string, limitInBytes int64) error {
+	// Held across the write: pod creation and RemoveContainer's cgroup Delete are serialized only by this lock.
+	h.containersMutex.Lock()
+	defer h.containersMutex.Unlock()
+
+	p, ok := h.pods[podID]
+	if !ok {
+		return errors.Errorf("pod %q does not exist", podID)
+	}
+	resources := &specs.LinuxResources{Memory: &specs.LinuxMemory{Limit: &limitInBytes}}
+	if err := p.cgroupControl.Update(resources); err != nil {
+		return errors.Wrapf(err, "failed to update memory limit for pod %q", podID)
+	}
+	return nil
 }
 
 func (h *Host) modifyContainerSettings(ctx context.Context, containerID string, req *guestrequest.ModificationRequest) error {
@@ -1680,6 +1714,34 @@ func (h *Host) modifyMappedDirectory(
 				h.setUVMInconsistent(
 					fmt.Errorf("unmounting plan9 device at %s failed: %w", md.MountPath, err),
 				)
+				return err
+			}
+			return nil
+		default:
+			return newInvalidRequestTypeError(rt)
+		}
+	})
+}
+
+func (h *Host) modifyMappedVirtioFS(
+	ctx context.Context,
+	rt guestrequest.RequestType,
+	mv *guestresource.LCOWMappedVirtioFS,
+) (err error) {
+	securityPolicy := h.securityOptions.PolicyEnforcer
+	return securityPolicy.WithMetadataRollback(func() error {
+		switch rt {
+		case guestrequest.RequestTypeAdd:
+			if err = securityPolicy.EnforcePlan9MountPolicy(ctx, mv.MountPath); err != nil {
+				return errors.Wrapf(err, "mounting virtio-fs share at %s denied by policy", mv.MountPath)
+			}
+			return storage.MountVirtioFSShare(ctx, mv.Tag, mv.ShareName, mv.MountPath, mv.ReadOnly)
+		case guestrequest.RequestTypeRemove:
+			if err = securityPolicy.EnforcePlan9UnmountPolicy(ctx, mv.MountPath); err != nil {
+				return errors.Wrapf(err, "unmounting virtio-fs share at %s denied by policy", mv.MountPath)
+			}
+			if err = storage.UnmountPath(ctx, mv.MountPath, true); err != nil {
+				h.setUVMInconsistent(fmt.Errorf("unmounting virtio-fs share at %s failed: %w", mv.MountPath, err))
 				return err
 			}
 			return nil
