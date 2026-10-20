@@ -141,8 +141,8 @@ func (s *System) modifyNetworkAdd(ctx context.Context, req *hcsschema.ModifySett
 			NicConfig: &vmservice.NICConfig{
 				NicId:      key,
 				MacAddress: bound.MacAddress,
-				Backend: &vmservice.NICConfig_Dio{
-					Dio: &vmservice.DioBackend{
+				Backend: &vmservice.NICConfig_KernelVmnic{
+					KernelVmnic: &vmservice.DioBackend{
 						SwitchId: switchID.String(),
 						PortId:   bound.PortID.String(),
 					},
@@ -171,7 +171,7 @@ func (s *System) modifyNetworkAdd(ctx context.Context, req *hcsschema.ModifySett
 		WithField("mac_address", bound.MacAddress).
 		WithField("switch_id", switchID.String()).
 		WithField("port_id", bound.PortID.String()).
-		Info("OpenVMM DIO network adapter added")
+		Info("OpenVMM network adapter added")
 	return nil
 }
 
@@ -212,8 +212,8 @@ func (s *System) modifyNetworkRemove(ctx context.Context, req *hcsschema.ModifyS
 				NicConfig: &vmservice.NICConfig{
 					NicId:      key,
 					MacAddress: binding.macAddress,
-					Backend: &vmservice.NICConfig_Dio{
-						Dio: &vmservice.DioBackend{
+					Backend: &vmservice.NICConfig_KernelVmnic{
+						KernelVmnic: &vmservice.DioBackend{
 							SwitchId: binding.switchID.String(),
 							PortId:   binding.portID.String(),
 						},
@@ -238,7 +238,7 @@ func (s *System) modifyNetworkRemove(ctx context.Context, req *hcsschema.ModifyS
 		WithField("mac_address", binding.macAddress).
 		WithField("switch_id", binding.switchID.String()).
 		WithField("port_id", binding.portID.String()).
-		Info("OpenVMM DIO network adapter removed")
+		Info("OpenVMM network adapter removed")
 	s.forgetNetworkBinding(key)
 	return nil
 }
@@ -341,7 +341,7 @@ type BoundEndpoint struct {
 	MacAddress string
 }
 
-// EndpointPortBinder binds and releases a Direct I/O network port.
+// EndpointPortBinder binds and releases the HNS switch port a pod NIC connects to.
 type EndpointPortBinder interface {
 	// Bind creates a switch port for nicID on the switch backing endpointID, then requeries
 	// the endpoint and reports what it found.

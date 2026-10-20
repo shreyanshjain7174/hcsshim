@@ -3920,6 +3920,7 @@ type NICConfig struct {
 	//	*NICConfig_Dio
 	//	*NICConfig_Tap
 	//	*NICConfig_Consomme
+	//	*NICConfig_KernelVmnic
 	Backend       isNICConfig_Backend `protobuf_oneof:"backend"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -4026,6 +4027,15 @@ func (x *NICConfig) GetConsomme() *ConsommeBackend {
 	return nil
 }
 
+func (x *NICConfig) GetKernelVmnic() *DioBackend {
+	if x != nil {
+		if x, ok := x.Backend.(*NICConfig_KernelVmnic); ok {
+			return x.KernelVmnic
+		}
+	}
+	return nil
+}
+
 type isNICConfig_Backend interface {
 	isNICConfig_Backend()
 }
@@ -4046,6 +4056,11 @@ type NICConfig_Consomme struct {
 	Consomme *ConsommeBackend `protobuf:"bytes,8,opt,name=consomme,proto3,oneof"`
 }
 
+type NICConfig_KernelVmnic struct {
+	// Windows: a vmswitch synthetic NIC on an existing switch port, served over the vmbus proxy.
+	KernelVmnic *DioBackend `protobuf:"bytes,9,opt,name=kernel_vmnic,json=kernelVmnic,proto3,oneof"`
+}
+
 func (*NICConfig_LegacyPortId) isNICConfig_Backend() {}
 
 func (*NICConfig_Dio) isNICConfig_Backend() {}
@@ -4053,6 +4068,8 @@ func (*NICConfig_Dio) isNICConfig_Backend() {}
 func (*NICConfig_Tap) isNICConfig_Backend() {}
 
 func (*NICConfig_Consomme) isNICConfig_Backend() {}
+
+func (*NICConfig_KernelVmnic) isNICConfig_Backend() {}
 
 type DioBackend struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -5572,7 +5589,7 @@ const file_vmservice_proto_rawDesc = "" +
 	"\tVPMEMDisk\x12\x1b\n" +
 	"\thost_path\x18\x01 \x01(\tR\bhostPath\x12'\n" +
 	"\x04type\x18\x02 \x01(\x0e2\x13.vmservice.DiskTypeR\x04type\x12\x1b\n" +
-	"\tread_only\x18\x03 \x01(\bR\breadOnly\"\xcb\x02\n" +
+	"\tread_only\x18\x03 \x01(\bR\breadOnly\"\x87\x03\n" +
 	"\tNICConfig\x12\x15\n" +
 	"\x06nic_id\x18\x01 \x01(\tR\x05nicId\x12\x1f\n" +
 	"\vmac_address\x18\x03 \x01(\tR\n" +
@@ -5582,7 +5599,8 @@ const file_vmservice_proto_rawDesc = "" +
 	"\x0elegacy_port_id\x18\x02 \x01(\tH\x00R\flegacyPortId\x12)\n" +
 	"\x03dio\x18\x06 \x01(\v2\x15.vmservice.DioBackendH\x00R\x03dio\x12)\n" +
 	"\x03tap\x18\a \x01(\v2\x15.vmservice.TapBackendH\x00R\x03tap\x128\n" +
-	"\bconsomme\x18\b \x01(\v2\x1a.vmservice.ConsommeBackendH\x00R\bconsommeB\t\n" +
+	"\bconsomme\x18\b \x01(\v2\x1a.vmservice.ConsommeBackendH\x00R\bconsomme\x12:\n" +
+	"\fkernel_vmnic\x18\t \x01(\v2\x15.vmservice.DioBackendH\x00R\vkernelVmnicB\t\n" +
 	"\abackend\"B\n" +
 	"\n" +
 	"DioBackend\x12\x1b\n" +
@@ -5846,51 +5864,52 @@ var file_vmservice_proto_depIdxs = []int32{
 	59, // 65: vmservice.NICConfig.dio:type_name -> vmservice.DioBackend
 	60, // 66: vmservice.NICConfig.tap:type_name -> vmservice.TapBackend
 	62, // 67: vmservice.NICConfig.consomme:type_name -> vmservice.ConsommeBackend
-	3,  // 68: vmservice.PortConfig.protocol:type_name -> vmservice.IpProtocol
-	61, // 69: vmservice.ConsommeBackend.ports:type_name -> vmservice.PortConfig
-	1,  // 70: vmservice.ModifyResourceRequest.type:type_name -> vmservice.ModifyType
-	69, // 71: vmservice.ModifyResourceRequest.processor:type_name -> vmservice.ModifyProcessorRequest
-	70, // 72: vmservice.ModifyResourceRequest.processor_config:type_name -> vmservice.ModifyProcessorConfigRequest
-	68, // 73: vmservice.ModifyResourceRequest.memory:type_name -> vmservice.ModifyMemoryRequest
-	56, // 74: vmservice.ModifyResourceRequest.scsi_disk:type_name -> vmservice.SCSIDisk
-	57, // 75: vmservice.ModifyResourceRequest.vpmem_disk:type_name -> vmservice.VPMEMDisk
-	58, // 76: vmservice.ModifyResourceRequest.nic_config:type_name -> vmservice.NICConfig
-	63, // 77: vmservice.ModifyResourceRequest.windows_device:type_name -> vmservice.WindowsPCIDevice
-	66, // 78: vmservice.ModifyResourceRequest.virtiofs_share:type_name -> vmservice.VirtioFSShare
-	14, // 79: vmservice.AddPcieDeviceRequest.device:type_name -> vmservice.PcieDeviceKind
-	4,  // 80: vmservice.UEFI.InitialVariables.secure_boot_template:type_name -> vmservice.UEFI.InitialVariables.SecureBootTemplate
-	5,  // 81: vmservice.VMConfig.GuestPowerActions.shutdown:type_name -> vmservice.VMConfig.GuestPowerAction
-	5,  // 82: vmservice.VMConfig.GuestPowerActions.reset:type_name -> vmservice.VMConfig.GuestPowerAction
-	5,  // 83: vmservice.VMConfig.GuestPowerActions.crash:type_name -> vmservice.VMConfig.GuestPowerAction
-	5,  // 84: vmservice.VMConfig.GuestPowerActions.watchdog:type_name -> vmservice.VMConfig.GuestPowerAction
-	7,  // 85: vmservice.CapabilitiesVMResponse.SupportedResource.resource:type_name -> vmservice.CapabilitiesVMResponse.Resource
-	50, // 86: vmservice.VM.CreateVM:input_type -> vmservice.CreateVMRequest
-	78, // 87: vmservice.VM.TeardownVM:input_type -> google.protobuf.Empty
-	78, // 88: vmservice.VM.PauseVM:input_type -> google.protobuf.Empty
-	78, // 89: vmservice.VM.ResumeVM:input_type -> google.protobuf.Empty
-	78, // 90: vmservice.VM.WaitVM:input_type -> google.protobuf.Empty
-	78, // 91: vmservice.VM.CapabilitiesVM:input_type -> google.protobuf.Empty
-	53, // 92: vmservice.VM.PropertiesVM:input_type -> vmservice.PropertiesVMRequest
-	71, // 93: vmservice.VM.ModifyResource:input_type -> vmservice.ModifyResourceRequest
-	72, // 94: vmservice.VM.AddPcieDevice:input_type -> vmservice.AddPcieDeviceRequest
-	73, // 95: vmservice.VM.RemovePcieDevice:input_type -> vmservice.RemovePcieDeviceRequest
-	78, // 96: vmservice.VM.Quit:input_type -> google.protobuf.Empty
-	78, // 97: vmservice.VM.CreateVM:output_type -> google.protobuf.Empty
-	78, // 98: vmservice.VM.TeardownVM:output_type -> google.protobuf.Empty
-	78, // 99: vmservice.VM.PauseVM:output_type -> google.protobuf.Empty
-	78, // 100: vmservice.VM.ResumeVM:output_type -> google.protobuf.Empty
-	78, // 101: vmservice.VM.WaitVM:output_type -> google.protobuf.Empty
-	55, // 102: vmservice.VM.CapabilitiesVM:output_type -> vmservice.CapabilitiesVMResponse
-	54, // 103: vmservice.VM.PropertiesVM:output_type -> vmservice.PropertiesVMResponse
-	78, // 104: vmservice.VM.ModifyResource:output_type -> google.protobuf.Empty
-	78, // 105: vmservice.VM.AddPcieDevice:output_type -> google.protobuf.Empty
-	78, // 106: vmservice.VM.RemovePcieDevice:output_type -> google.protobuf.Empty
-	78, // 107: vmservice.VM.Quit:output_type -> google.protobuf.Empty
-	97, // [97:108] is the sub-list for method output_type
-	86, // [86:97] is the sub-list for method input_type
-	86, // [86:86] is the sub-list for extension type_name
-	86, // [86:86] is the sub-list for extension extendee
-	0,  // [0:86] is the sub-list for field type_name
+	59, // 68: vmservice.NICConfig.kernel_vmnic:type_name -> vmservice.DioBackend
+	3,  // 69: vmservice.PortConfig.protocol:type_name -> vmservice.IpProtocol
+	61, // 70: vmservice.ConsommeBackend.ports:type_name -> vmservice.PortConfig
+	1,  // 71: vmservice.ModifyResourceRequest.type:type_name -> vmservice.ModifyType
+	69, // 72: vmservice.ModifyResourceRequest.processor:type_name -> vmservice.ModifyProcessorRequest
+	70, // 73: vmservice.ModifyResourceRequest.processor_config:type_name -> vmservice.ModifyProcessorConfigRequest
+	68, // 74: vmservice.ModifyResourceRequest.memory:type_name -> vmservice.ModifyMemoryRequest
+	56, // 75: vmservice.ModifyResourceRequest.scsi_disk:type_name -> vmservice.SCSIDisk
+	57, // 76: vmservice.ModifyResourceRequest.vpmem_disk:type_name -> vmservice.VPMEMDisk
+	58, // 77: vmservice.ModifyResourceRequest.nic_config:type_name -> vmservice.NICConfig
+	63, // 78: vmservice.ModifyResourceRequest.windows_device:type_name -> vmservice.WindowsPCIDevice
+	66, // 79: vmservice.ModifyResourceRequest.virtiofs_share:type_name -> vmservice.VirtioFSShare
+	14, // 80: vmservice.AddPcieDeviceRequest.device:type_name -> vmservice.PcieDeviceKind
+	4,  // 81: vmservice.UEFI.InitialVariables.secure_boot_template:type_name -> vmservice.UEFI.InitialVariables.SecureBootTemplate
+	5,  // 82: vmservice.VMConfig.GuestPowerActions.shutdown:type_name -> vmservice.VMConfig.GuestPowerAction
+	5,  // 83: vmservice.VMConfig.GuestPowerActions.reset:type_name -> vmservice.VMConfig.GuestPowerAction
+	5,  // 84: vmservice.VMConfig.GuestPowerActions.crash:type_name -> vmservice.VMConfig.GuestPowerAction
+	5,  // 85: vmservice.VMConfig.GuestPowerActions.watchdog:type_name -> vmservice.VMConfig.GuestPowerAction
+	7,  // 86: vmservice.CapabilitiesVMResponse.SupportedResource.resource:type_name -> vmservice.CapabilitiesVMResponse.Resource
+	50, // 87: vmservice.VM.CreateVM:input_type -> vmservice.CreateVMRequest
+	78, // 88: vmservice.VM.TeardownVM:input_type -> google.protobuf.Empty
+	78, // 89: vmservice.VM.PauseVM:input_type -> google.protobuf.Empty
+	78, // 90: vmservice.VM.ResumeVM:input_type -> google.protobuf.Empty
+	78, // 91: vmservice.VM.WaitVM:input_type -> google.protobuf.Empty
+	78, // 92: vmservice.VM.CapabilitiesVM:input_type -> google.protobuf.Empty
+	53, // 93: vmservice.VM.PropertiesVM:input_type -> vmservice.PropertiesVMRequest
+	71, // 94: vmservice.VM.ModifyResource:input_type -> vmservice.ModifyResourceRequest
+	72, // 95: vmservice.VM.AddPcieDevice:input_type -> vmservice.AddPcieDeviceRequest
+	73, // 96: vmservice.VM.RemovePcieDevice:input_type -> vmservice.RemovePcieDeviceRequest
+	78, // 97: vmservice.VM.Quit:input_type -> google.protobuf.Empty
+	78, // 98: vmservice.VM.CreateVM:output_type -> google.protobuf.Empty
+	78, // 99: vmservice.VM.TeardownVM:output_type -> google.protobuf.Empty
+	78, // 100: vmservice.VM.PauseVM:output_type -> google.protobuf.Empty
+	78, // 101: vmservice.VM.ResumeVM:output_type -> google.protobuf.Empty
+	78, // 102: vmservice.VM.WaitVM:output_type -> google.protobuf.Empty
+	55, // 103: vmservice.VM.CapabilitiesVM:output_type -> vmservice.CapabilitiesVMResponse
+	54, // 104: vmservice.VM.PropertiesVM:output_type -> vmservice.PropertiesVMResponse
+	78, // 105: vmservice.VM.ModifyResource:output_type -> google.protobuf.Empty
+	78, // 106: vmservice.VM.AddPcieDevice:output_type -> google.protobuf.Empty
+	78, // 107: vmservice.VM.RemovePcieDevice:output_type -> google.protobuf.Empty
+	78, // 108: vmservice.VM.Quit:output_type -> google.protobuf.Empty
+	98, // [98:109] is the sub-list for method output_type
+	87, // [87:98] is the sub-list for method input_type
+	87, // [87:87] is the sub-list for extension type_name
+	87, // [87:87] is the sub-list for extension extendee
+	0,  // [0:87] is the sub-list for field type_name
 }
 
 func init() { file_vmservice_proto_init() }
@@ -5952,6 +5971,7 @@ func file_vmservice_proto_init() {
 		(*NICConfig_Dio)(nil),
 		(*NICConfig_Tap)(nil),
 		(*NICConfig_Consomme)(nil),
+		(*NICConfig_KernelVmnic)(nil),
 	}
 	file_vmservice_proto_msgTypes[51].OneofWrappers = []any{
 		(*TapBackend_Name)(nil),

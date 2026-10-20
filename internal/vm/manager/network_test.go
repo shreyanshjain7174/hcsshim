@@ -645,11 +645,11 @@ func TestSystemModifyNetworkAddSuccessRequestFields(t *testing.T) {
 	}
 	call := calls[0]
 	nic := call.GetNicConfig()
-	dio := nic.GetDio()
-	if call.GetType() != vmservice.ModifyType_ADD || nic == nil || dio == nil {
-		t.Fatalf("request = %+v, want ADD NicConfig with DIO backend", call)
+	port := nic.GetKernelVmnic()
+	if call.GetType() != vmservice.ModifyType_ADD || nic == nil || port == nil {
+		t.Fatalf("request = %+v, want ADD NicConfig with kernel vmnic backend", call)
 	}
-	if nic.GetNicId() != mustGUID(t, testNicID).String() || nic.GetMacAddress() != "12:34:56:78:9a:bc" || dio.GetSwitchId() != mustGUID(t, testSwitchID).String() || dio.GetPortId() != mustGUID(t, testPortID).String() {
+	if nic.GetNicId() != mustGUID(t, testNicID).String() || nic.GetMacAddress() != "12:34:56:78:9a:bc" || port.GetSwitchId() != mustGUID(t, testSwitchID).String() || port.GetPortId() != mustGUID(t, testPortID).String() {
 		t.Fatalf("ADD tuple = %+v, want committed NIC/MAC/switch/port identity", nic)
 	}
 }
@@ -722,7 +722,7 @@ func TestSystemModifyNetworkRemoveUnbindFailureRetainsThenRetrySucceeds(t *testi
 	}
 	remove := client.calls()[1].GetNicConfig()
 	if remove.GetNicId() != mustGUID(t, testNicID).String() || remove.GetMacAddress() != testMAC ||
-		remove.GetDio().GetSwitchId() != mustGUID(t, testSwitchID).String() || remove.GetDio().GetPortId() != mustGUID(t, testPortID).String() {
+		remove.GetKernelVmnic().GetSwitchId() != mustGUID(t, testSwitchID).String() || remove.GetKernelVmnic().GetPortId() != mustGUID(t, testPortID).String() {
 		t.Fatalf("REMOVE tuple = %+v, want committed NIC/MAC/switch/port identity", remove)
 	}
 }
